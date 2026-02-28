@@ -1,0 +1,5 @@
+inherits: ../default.yaml
+strategy:
+  name: moving_average
+  fast_window: 10
+  slow_window: 50
