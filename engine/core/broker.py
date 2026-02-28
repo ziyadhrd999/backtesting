@@ -4,10 +4,16 @@ from engine.execution.fill_model import simulate_fill
 
 class SimBroker:
     def __init__(self, fee_bps: float, slippage_bps: float) -> None:
+        """
+        Initializes the simulated broker with transaction fee and slippage parameters.
+        """
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
 
     def execute(self, order: OrderEvent, market_price: float) -> FillEvent:
+        """
+        Simulates executing an order at the current market price and returns the resulting fill event with fees and slippage applied.
+        """
         fill_price, fee = simulate_fill(
             price=market_price,
             quantity=order.quantity,
