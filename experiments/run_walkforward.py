@@ -1,8 +1,3 @@
-from pathlib import Path
-import sys
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-
 from analytics.performance import sharpe_ratio
 from engine.core.backtest_engine import BacktestEngine, EngineConfig
 from engine.core.event import MarketEvent

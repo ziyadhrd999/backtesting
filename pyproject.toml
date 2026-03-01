@@ -8,7 +8,12 @@ version = "0.1.0"
 description = "Notebook-first modular backtest engine scaffold"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["yfinance>=0.2.50"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
+
+
+[tool.setuptools.packages.find]
+include = ["analytics*", "data*", "engine*", "strategies*"]

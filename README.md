@@ -5,7 +5,7 @@ This repository now follows a modular layout inspired by your proposed structure
 ## Project layout
 
 - `configs/`: runtime configuration files
-- `data/loaders/`: market data loader adapters (CSV, Parquet, crypto API stub)
+- `data/loaders/`: market data loader adapters (CSV, yfinance)
 - `engine/`: core event-driven backtest components
 - `strategies/`: strategy interfaces and templates
 - `analytics/`: performance and risk metric helpers
@@ -19,8 +19,9 @@ This repository now follows a modular layout inspired by your proposed structure
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+pip install -e .
 pytest
-python experiments/run_backtest.py  # uses configs/default.yaml
+python -m experiments.run_backtest  # uses configs/default.yaml
 ```
 
 ## Notebook flow
