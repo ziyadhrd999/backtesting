@@ -10,6 +10,8 @@ strategy:
   slow_window: 100
 
 data:
-  source: csv
-  symbol: BTCUSDT
-  timeframe: 1d
+  source: yfinance
+  symbol: NVDA
+  period: 2y
+  interval: 1d
+  auto_adjust: true
