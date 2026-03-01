@@ -1,3 +1,9 @@
+"""Transaction-cost sensitivity study for backtest performance.
+
+This script sweeps fee/slippage/spread parameter combinations, runs the
+configured strategy for each scenario, and prints sorted summary rows.
+"""
+
 from itertools import product
 from pathlib import Path
 

@@ -74,6 +74,11 @@ class RunResult:
         positions: Position quantity per bar.
         cash_series: Cash balance per bar.
         timestamps: Bar timestamps aligned with ``positions``/``cash_series``.
+
+    Example:
+        >>> result = RunResult(equity_curve=[1000.0], fills=[], positions=[0.0], cash_series=[1000.0], timestamps=['t0'])
+        >>> result.cash_series[-1]
+        1000.0
     """
 
     equity_curve: list[float]

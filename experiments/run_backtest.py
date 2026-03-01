@@ -16,6 +16,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_bars(data_cfg: dict) -> list:
+    """Load market bars from configured data source.
+
+    Supports ``yfinance`` and ``csv`` source types and returns engine-compatible
+    market bar events.
+
+    Args:
+        data_cfg: Data configuration mapping (source, symbol, period/interval,
+            path, etc.).
+
+    Returns:
+        List of market bars.
+
+    Raises:
+        ValueError: If the ``source`` value is unsupported.
+
+    Example:
+        >>> load_bars({'source': 'csv', 'path': 'data.csv', 'symbol': 'S'})
+        [...]
+    """
     source = str(data_cfg.get("source", "yfinance")).lower().strip()
 
     if source == "yfinance":
@@ -34,6 +53,19 @@ def load_bars(data_cfg: dict) -> list:
 
 
 def _git_commit() -> str:
+    """Return current Git commit SHA for this repository.
+
+    The function executes ``git rev-parse HEAD`` in repository root and returns
+    the hash string. If Git is unavailable or the command fails, it returns the
+    fallback value ``"unknown"``.
+
+    Returns:
+        Current commit hash string, or ``"unknown"`` when unavailable.
+
+    Example:
+        >>> isinstance(_git_commit(), str)
+        True
+    """
     try:
         return check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     except (CalledProcessError, FileNotFoundError):
@@ -49,6 +81,28 @@ def _persist_run(
     positions: list[float],
     cash_series: list[float],
 ) -> Path:
+    """Persist experiment artifacts to disk.
+
+    Writes config snapshot, summary metrics, run metadata, equity curve,
+    fill-level data, and position/cash time series into a timestamped run
+    directory under ``artifacts/runs``.
+
+    Args:
+        cfg: Full resolved runtime config.
+        metrics: Scalar performance/risk metrics.
+        timestamps: Bar timestamps aligned with position/cash series.
+        equity_curve: Equity values across the run.
+        fills: Fill event list.
+        positions: Position quantity series.
+        cash_series: Cash balance series.
+
+    Returns:
+        Path to the created run directory.
+
+    Example:
+        >>> isinstance(_persist_run({}, {}, [], [], [], [], []), Path)
+        True
+    """
     run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     strategy_name = str(cfg.get("strategy", {}).get("name", "strategy"))
     run_dir = ROOT / "artifacts" / "runs" / f"{run_id}_{strategy_name}"
@@ -124,7 +178,22 @@ if __name__ == "__main__":
             )
 
             class BuyAndHold:
+                """Simple benchmark strategy that always targets full long exposure.
+
+                Example:
+                    >>> BuyAndHold().on_bar(None)
+                    1.0
+                """
+
                 def on_bar(self, _market_event) -> float:
+                    """Return constant target weight for each incoming bar.
+
+                    Args:
+                        _market_event: Unused market event argument.
+
+                    Returns:
+                        Constant target weight ``1.0``.
+                    """
                     return 1.0
 
             benchmark_equity = bh_engine.run(benchmark_bars, BuyAndHold())

@@ -10,7 +10,24 @@ from engine.core.event import FillEvent
 
 
 def rolling_sharpe(equity_curve: list[float], window: int = 20, annualization: int = 252) -> list[float]:
-    """Compute rolling Sharpe values from an equity curve."""
+    """Compute rolling Sharpe ratio values from an equity curve.
+
+    The function converts the input equity curve into periodic returns, then
+    computes a Sharpe ratio over every rolling window of returns.
+
+    Args:
+        equity_curve: Portfolio equity values ordered in time.
+        window: Rolling window size in return observations.
+        annualization: Number of periods per year for annualization.
+
+    Returns:
+        List of rolling Sharpe values. Returns an empty list when there is not
+        enough data to fill a window.
+
+    Example:
+        >>> rolling_sharpe([100, 101, 100, 102], window=2, annualization=252)
+        [...]
+    """
     rets = equity_returns(equity_curve)
     if window <= 1 or len(rets) < window:
         return []
@@ -26,7 +43,23 @@ def rolling_sharpe(equity_curve: list[float], window: int = 20, annualization: i
 
 
 def drawdown_duration(equity_curve: list[float]) -> dict[str, float]:
-    """Return max/avg drawdown duration measured in bars."""
+    """Compute drawdown duration statistics in bars.
+
+    A drawdown duration is the length of a contiguous period where drawdown is
+    below zero (i.e., equity remains under the previous peak).
+
+    Args:
+        equity_curve: Portfolio equity values ordered in time.
+
+    Returns:
+        Dictionary with:
+        - ``MaxDrawdownDurationBars``: longest drawdown streak length.
+        - ``AvgDrawdownDurationBars``: average drawdown streak length.
+
+    Example:
+        >>> drawdown_duration([100, 110, 105, 103, 111])
+        {'MaxDrawdownDurationBars': 2.0, 'AvgDrawdownDurationBars': 2.0}
+    """
     dd = drawdown_series(equity_curve)
     if not dd:
         return {"MaxDrawdownDurationBars": 0.0, "AvgDrawdownDurationBars": 0.0}
@@ -52,7 +85,23 @@ def drawdown_duration(equity_curve: list[float]) -> dict[str, float]:
 
 
 def turnover_from_fills(fills: list[FillEvent], equity_curve: list[float]) -> float:
-    """Simple turnover proxy as traded notional over average equity."""
+    """Estimate turnover from fills and equity.
+
+    Turnover is computed as total traded notional divided by average equity.
+    This provides a simple normalized activity measure.
+
+    Args:
+        fills: Executed fill events.
+        equity_curve: Portfolio equity values ordered in time.
+
+    Returns:
+        Scalar turnover estimate. Returns 0.0 when fills/equity are unavailable
+        or average equity is zero.
+
+    Example:
+        >>> turnover_from_fills([], [100_000, 101_000])
+        0.0
+    """
     if not fills or not equity_curve:
         return 0.0
     traded_notional = sum(abs(f.fill_price * f.quantity) for f in fills)
@@ -63,7 +112,24 @@ def turnover_from_fills(fills: list[FillEvent], equity_curve: list[float]) -> fl
 
 
 def exposure_metrics(positions: list[float], prices: list[float], equity_curve: list[float]) -> dict[str, float]:
-    """Compute average and peak absolute exposure."""
+    """Compute average and peak absolute exposure.
+
+    Exposure is estimated per bar as ``abs(position * price) / abs(equity)``.
+
+    Args:
+        positions: Position quantity by bar.
+        prices: Price by bar aligned with ``positions``.
+        equity_curve: Equity by bar aligned with ``positions``.
+
+    Returns:
+        Dictionary with:
+        - ``AvgAbsExposure``: mean absolute exposure.
+        - ``PeakAbsExposure``: maximum absolute exposure.
+
+    Example:
+        >>> exposure_metrics([10, 10], [100, 110], [1000, 1100])
+        {'AvgAbsExposure': ..., 'PeakAbsExposure': ...}
+    """
     n = min(len(positions), len(prices), len(equity_curve))
     if n == 0:
         return {"AvgAbsExposure": 0.0, "PeakAbsExposure": 0.0}
@@ -83,7 +149,27 @@ def exposure_metrics(positions: list[float], prices: list[float], equity_curve: 
 
 
 def trade_list_from_fills(fills: list[FillEvent]) -> list[dict[str, float | str]]:
-    """Create basic round-trip trade records from fills."""
+    """Build a basic round-trip trade list from fill events.
+
+    Fills are grouped by symbol and processed chronologically to detect simple
+    open-to-flat round trips. Each closed trade record includes entry/exit
+    timestamps, quantity, and realized PnL.
+
+    Args:
+        fills: Fill events in chronological order.
+
+    Returns:
+        List of trade dictionaries containing ``symbol``, ``entry_timestamp``,
+        ``exit_timestamp``, ``quantity``, and ``pnl``.
+
+    Example:
+        >>> fills = [
+        ...     FillEvent(timestamp='t0', symbol='S', side='BUY', quantity=1, fill_price=100, fee=0),
+        ...     FillEvent(timestamp='t1', symbol='S', side='SELL', quantity=1, fill_price=101, fee=0),
+        ... ]
+        >>> trade_list_from_fills(fills)[0]['pnl']
+        1.0
+    """
     if not fills:
         return []
 
@@ -132,6 +218,18 @@ def trade_list_from_fills(fills: list[FillEvent]) -> list[dict[str, float | str]
 
 
 def win_rate(trades: list[dict[str, float | str]]) -> float:
+    """Calculate fraction of profitable trades.
+
+    Args:
+        trades: Trade dictionaries containing a numeric ``pnl`` field.
+
+    Returns:
+        Ratio in ``[0, 1]`` of trades with positive PnL.
+
+    Example:
+        >>> win_rate([{'pnl': 1.0}, {'pnl': -0.5}])
+        0.5
+    """
     if not trades:
         return 0.0
     wins = sum(1 for t in trades if float(t["pnl"]) > 0)
@@ -139,7 +237,24 @@ def win_rate(trades: list[dict[str, float | str]]) -> float:
 
 
 def benchmark_comparison(strategy_equity: list[float], benchmark_equity: list[float], annualization: int = 252) -> dict[str, float]:
-    """Return active-return stats vs benchmark."""
+    """Compute benchmark-relative performance statistics.
+
+    Both curves are aligned to the shorter available length. Active returns are
+    defined as strategy periodic returns minus benchmark periodic returns.
+
+    Args:
+        strategy_equity: Strategy equity curve.
+        benchmark_equity: Benchmark equity curve.
+        annualization: Periods per year for annualization.
+
+    Returns:
+        Dictionary with benchmark CAGR, active CAGR, tracking error, and
+        information ratio.
+
+    Example:
+        >>> benchmark_comparison([100, 102], [100, 101], annualization=252)
+        {'BenchmarkCAGR': ..., 'ActiveCAGR': ..., 'TrackingError': ..., 'InformationRatio': ...}
+    """
     n = min(len(strategy_equity), len(benchmark_equity))
     if n < 2:
         return {"BenchmarkCAGR": 0.0, "ActiveCAGR": 0.0, "TrackingError": 0.0, "InformationRatio": 0.0}
@@ -170,7 +285,29 @@ def make_tearsheet_extended(
     benchmark_equity: list[float] | None = None,
     rolling_window: int = 20,
 ) -> dict[str, float | int]:
-    """Extended tearsheet that preserves core metrics and adds richer analytics."""
+    """Build a comprehensive tearsheet while preserving core metrics.
+
+    This function starts with legacy core metrics (CAGR/Sharpe/MaxDrawdown/
+    Calmar), then adds trade-level and path-dependent diagnostics such as
+    turnover, win rate, rolling Sharpe summary, drawdown duration, exposure,
+    and optional benchmark-relative metrics.
+
+    Args:
+        equity_curve: Strategy equity values ordered in time.
+        annualization: Number of periods per year.
+        fills: Optional executed fills for trade/turnover metrics.
+        positions: Optional position series for exposure metrics.
+        prices: Optional price series aligned with ``positions``.
+        benchmark_equity: Optional benchmark equity curve.
+        rolling_window: Window length used for rolling Sharpe computation.
+
+    Returns:
+        Dictionary of scalar tearsheet metrics.
+
+    Example:
+        >>> make_tearsheet_extended([100, 101, 102], annualization=252)
+        {'CAGR': ..., 'Sharpe': ..., 'MaxDrawdown': ..., 'Calmar': ..., ...}
+    """
     fills = fills or []
     positions = positions or []
     prices = prices or []
