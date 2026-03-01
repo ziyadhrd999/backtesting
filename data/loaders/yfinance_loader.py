@@ -5,12 +5,11 @@ from typing import Any
 from engine.core.event import MarketEvent
 
 
-def _close_series(dataframe: Any, symbol: str):
-    close = dataframe["Close"]
-    # yfinance can return a MultiIndex column shape for multi-ticker requests
-    if hasattr(close, "columns") and symbol in getattr(close, "columns", []):
-        return close[symbol]
-    return close
+def _series(dataframe: Any, name: str, symbol: str):
+    series = dataframe[name]
+    if hasattr(series, "columns") and symbol in getattr(series, "columns", []):
+        return series[symbol]
+    return series
 
 
 def load_yfinance(
@@ -32,8 +31,23 @@ def load_yfinance(
     if market is None or market.empty:
         return []
 
-    close_series = _close_series(market, symbol).dropna()
-    return [
-        MarketEvent(timestamp=idx.strftime("%Y-%m-%d"), symbol=symbol, close=float(price))
-        for idx, price in close_series.items()
-    ]
+    open_s = _series(market, "Open", symbol)
+    high_s = _series(market, "High", symbol)
+    low_s = _series(market, "Low", symbol)
+    close_s = _series(market, "Close", symbol)
+    vol_s = _series(market, "Volume", symbol)
+
+    bars: list[MarketEvent] = []
+    for idx in close_s.dropna().index:
+        bars.append(
+            MarketEvent(
+                timestamp=idx.strftime("%Y-%m-%d"),
+                symbol=symbol,
+                open=float(open_s.loc[idx]),
+                high=float(high_s.loc[idx]),
+                low=float(low_s.loc[idx]),
+                close=float(close_s.loc[idx]),
+                volume=float(vol_s.loc[idx]),
+            )
+        )
+    return bars

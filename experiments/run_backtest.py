@@ -34,6 +34,7 @@ if __name__ == "__main__":
         initial_cash=float(cfg["engine"]["initial_cash"]),
         fee_bps=float(cfg["engine"]["fee_bps"]),
         slippage_bps=float(cfg["engine"]["slippage_bps"]),
+        spread_bps=float(cfg["engine"].get("spread_bps", 1.0)),
     )
 
     strategy_cfg = cfg.get("strategy", {})

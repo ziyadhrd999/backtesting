@@ -39,5 +39,5 @@ python -m experiments.run_backtest  # uses configs/default.yaml
 
 ## Dev update
 
-- `experiments/run_backtest.py` now reads engine/strategy settings from `configs/default.yaml`.
+- `experiments/run_backtest.py` now reads engine/strategy settings from `configs/default.yaml` (including spread/slippage/fees).
 - Strategy selection is centralized in `strategies/factory.py`.
