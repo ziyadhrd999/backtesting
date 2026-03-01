@@ -37,6 +37,13 @@ python -m experiments.run_backtest  # uses configs/default.yaml
 - Existing `backtest_engine_template.ipynb` is kept as a standalone all-in-one reference.
 
 
+## Phase 4 workflow additions
+
+- `experiments/run_backtest.py` now persists run artifacts (`config.snapshot.json`, `metrics.summary.json`, `equity_curve.csv`, `fills.csv`, `positions.csv`) under `artifacts/runs/...`.
+- Extended analytics include trade count/win rate, exposure, turnover, rolling Sharpe summary, and drawdown duration.
+- Optional benchmark comparison can be enabled in `configs/default.yaml`.
+- `experiments/run_cost_sensitivity.py` sweeps fee/slippage/spread assumptions and prints comparative metrics.
+
 ## Dev update
 
 - `experiments/run_backtest.py` now reads engine/strategy settings from `configs/default.yaml` (including spread/slippage/fees).
