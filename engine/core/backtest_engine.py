@@ -14,7 +14,24 @@ from engine.risk.risk_manager import (
 
 @dataclass
 class EngineConfig:
-    """Configuration for capital, execution frictions, latency, and risk controls."""
+    """Runtime configuration for engine behavior and constraints.
+
+    Args:
+        initial_cash: Starting account cash.
+        fee_bps: Transaction fee in basis points.
+        slippage_bps: Slippage in basis points.
+        spread_bps: Spread adjustment in basis points.
+        latency_bars: Number of bars to wait before a new order becomes executable.
+        max_abs_weight: Hard cap on absolute strategy weight.
+        max_turnover_qty: Max quantity change allowed per bar.
+        max_notional: Max absolute notional exposure per asset.
+        max_abs_exposure: Additional cap on absolute strategy exposure.
+
+    Example:
+        >>> cfg = EngineConfig(initial_cash=50_000, latency_bars=1, max_notional=10_000)
+        >>> (cfg.initial_cash, cfg.latency_bars, cfg.max_notional)
+        (50000, 1, 10000)
+    """
 
     initial_cash: float = 100_000.0
     fee_bps: float = 1.0
@@ -31,17 +48,45 @@ class EngineConfig:
 
 @dataclass
 class PendingOrder:
-    """Order scheduled for execution once the current bar index reaches `ready_at_index`."""
+    """Represents an order waiting for latency/trigger conditions.
+
+    Args:
+        order: The order payload to execute later.
+        ready_at_index: Earliest bar index where execution can be attempted.
+
+    Example:
+        >>> order = OrderEvent(timestamp="t0", symbol="S", side="BUY", quantity=1)
+        >>> PendingOrder(order=order, ready_at_index=2).ready_at_index
+        2
+    """
 
     order: OrderEvent
     ready_at_index: int
 
 
 class BacktestEngine:
-    """Event-driven backtest engine for single-asset strategies."""
+    """Event-driven single-asset backtesting engine.
+
+    Args:
+        config: Engine configuration controlling execution and risk behavior.
+
+    Example:
+        >>> engine = BacktestEngine(EngineConfig(initial_cash=10_000))
+        >>> isinstance(engine.pending_orders, list)
+        True
+    """
 
     def __init__(self, config: EngineConfig) -> None:
-        """Initialize broker, portfolio state, and pending-order queue."""
+        """Initialize portfolio, broker, and pending-order state.
+
+        Args:
+            config: :class:`EngineConfig` instance with all runtime settings.
+
+        Example:
+            >>> engine = BacktestEngine(EngineConfig())
+            >>> engine.config.initial_cash
+            100000.0
+        """
         self.config = config
         self.portfolio = Portfolio(initial_cash=config.initial_cash)
         self.broker = SimBroker(
@@ -52,10 +97,16 @@ class BacktestEngine:
         self.pending_orders: list[PendingOrder] = []
 
     def _execute_ready_orders(self, bar: MarketEvent, bar_idx: int) -> None:
-        """Execute all orders whose readiness time has arrived on the current bar.
+        """Execute queued orders whose readiness index has been reached.
 
-        Conditional orders (e.g. LIMIT/STOP) that are not triggered remain pending.
-        Filled orders update portfolio cash/position immediately.
+        Args:
+            bar: Current market bar used for trigger and fill checks.
+            bar_idx: Integer index of the current bar in the run loop.
+
+        Example:
+            >>> # Called internally from `run` on each bar
+            >>> # and updates `self.pending_orders` in place.
+            >>> pass
         """
         still_pending: list[PendingOrder] = []
         for pending in self.pending_orders:
@@ -79,14 +130,23 @@ class BacktestEngine:
         self.pending_orders = still_pending
 
     def run(self, bars: list[MarketEvent], strategy) -> list[float]:
-        """Run the strategy on a bar sequence and return the resulting equity curve.
+        """Run strategy over historical bars and return equity curve.
 
-        Flow per bar:
-        1) mark portfolio to market,
-        2) execute any ready pending orders,
-        3) compute target exposure,
-        4) apply configured risk constraints,
-        5) schedule a rebalance market order with optional latency.
+        Args:
+            bars: Ordered sequence of :class:`MarketEvent` bars.
+            strategy: Strategy object exposing ``on_bar(bar) -> target_weight``.
+
+        Returns:
+            List of equity points produced by the portfolio over time.
+
+        Example:
+            >>> class BuyAndHold:
+            ...     def on_bar(self, market_event):
+            ...         return 1.0
+            >>> bars = [MarketEvent(timestamp="t0", symbol="S", close=100.0)]
+            >>> curve = BacktestEngine(EngineConfig()).run(bars, BuyAndHold())
+            >>> isinstance(curve, list)
+            True
         """
         latency = max(0, int(self.config.latency_bars))
 
