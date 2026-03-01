@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 from engine.core.broker import SimBroker
-from engine.core.event import MarketEvent, OrderEvent
+from engine.core.event import FillEvent, MarketEvent, OrderEvent
 from engine.core.portfolio import Portfolio
 from engine.risk.position_sizer import target_qty_from_weight
 from engine.risk.risk_manager import (
@@ -64,6 +64,30 @@ class PendingOrder:
     ready_at_index: int
 
 
+@dataclass
+class RunResult:
+    """Structured output produced by :meth:`BacktestEngine.run_detailed`.
+
+    Attributes:
+        equity_curve: Equity value per mark-to-market event.
+        fills: Executed fills in chronological order.
+        positions: Position quantity per bar.
+        cash_series: Cash balance per bar.
+        timestamps: Bar timestamps aligned with ``positions``/``cash_series``.
+
+    Example:
+        >>> result = RunResult(equity_curve=[1000.0], fills=[], positions=[0.0], cash_series=[1000.0], timestamps=['t0'])
+        >>> result.cash_series[-1]
+        1000.0
+    """
+
+    equity_curve: list[float]
+    fills: list[FillEvent]
+    positions: list[float]
+    cash_series: list[float]
+    timestamps: list[str]
+
+
 class BacktestEngine:
     """Event-driven single-asset backtesting engine.
 
@@ -95,6 +119,10 @@ class BacktestEngine:
             spread_bps=config.spread_bps,
         )
         self.pending_orders: list[PendingOrder] = []
+        self.fill_events: list[FillEvent] = []
+        self.position_series: list[float] = []
+        self.cash_series: list[float] = []
+        self.timestamp_series: list[str] = []
 
     def _execute_ready_orders(self, bar: MarketEvent, bar_idx: int) -> None:
         """Execute queued orders whose readiness index has been reached.
@@ -126,6 +154,7 @@ class BacktestEngine:
                 fill_price=fill.fill_price,
                 fee=fill.fee,
             )
+            self.fill_events.append(fill)
 
         self.pending_orders = still_pending
 
@@ -148,7 +177,27 @@ class BacktestEngine:
             >>> isinstance(curve, list)
             True
         """
+        result = self.run_detailed(bars, strategy)
+        return result.equity_curve
+
+    def run_detailed(self, bars: list[MarketEvent], strategy) -> RunResult:
+        """Run strategy and return rich run artifacts for analytics.
+
+        Args:
+            bars: Ordered sequence of market bars.
+            strategy: Strategy object exposing ``on_bar(bar) -> target_weight``.
+
+        Returns:
+            :class:`RunResult` with equity, fills, and bar-level state series.
+        """
         latency = max(0, int(self.config.latency_bars))
+
+        self.portfolio = Portfolio(initial_cash=self.config.initial_cash)
+        self.pending_orders = []
+        self.fill_events = []
+        self.position_series = []
+        self.cash_series = []
+        self.timestamp_series = []
 
         for i, bar in enumerate(bars):
             self.portfolio.mark_to_market(price=bar.close)
@@ -177,6 +226,9 @@ class BacktestEngine:
 
             delta = target_qty - self.portfolio.state.position_qty
             if abs(delta) < 1e-9:
+                self.position_series.append(self.portfolio.state.position_qty)
+                self.cash_series.append(self.portfolio.state.cash)
+                self.timestamp_series.append(bar.timestamp)
                 continue
 
             side = "BUY" if delta > 0 else "SELL"
@@ -188,5 +240,14 @@ class BacktestEngine:
                 order_type="MARKET",
             )
             self.pending_orders.append(PendingOrder(order=order, ready_at_index=i + latency))
+            self.position_series.append(self.portfolio.state.position_qty)
+            self.cash_series.append(self.portfolio.state.cash)
+            self.timestamp_series.append(bar.timestamp)
 
-        return self.portfolio.equity_curve
+        return RunResult(
+            equity_curve=list(self.portfolio.equity_curve),
+            fills=list(self.fill_events),
+            positions=list(self.position_series),
+            cash_series=list(self.cash_series),
+            timestamps=list(self.timestamp_series),
+        )
