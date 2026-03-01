@@ -31,3 +31,21 @@ def test_limit_order_fills_only_when_touched():
         bar=bar,
     )
     assert sell_limit_no_fill is None
+
+
+def test_stop_order_fills_only_when_triggered():
+    broker = SimBroker(fee_bps=0, slippage_bps=0, spread_bps=0)
+    bar = MarketEvent(timestamp="t1", symbol="S", open=100, high=102, low=99, close=101)
+
+    buy_stop_fill = broker.execute(
+        order=OrderEvent(timestamp="t1", symbol="S", side="BUY", quantity=1, order_type="STOP", stop_price=101.5),
+        bar=bar,
+    )
+    assert buy_stop_fill is not None
+    assert buy_stop_fill.fill_price == 101.5
+
+    sell_stop_no_fill = broker.execute(
+        order=OrderEvent(timestamp="t1", symbol="S", side="SELL", quantity=1, order_type="STOP", stop_price=98.5),
+        bar=bar,
+    )
+    assert sell_stop_no_fill is None

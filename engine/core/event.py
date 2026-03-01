@@ -37,8 +37,9 @@ class OrderEvent:
     symbol: str
     side: Literal["BUY", "SELL"]
     quantity: float
-    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    order_type: Literal["MARKET", "LIMIT", "STOP"] = "MARKET"
     limit_price: float | None = None
+    stop_price: float | None = None
 
 
 @dataclass(frozen=True)
