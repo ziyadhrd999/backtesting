@@ -2,7 +2,10 @@ engine:
   initial_cash: 100000
   fee_bps: 1.0
   slippage_bps: 2.0
+  spread_bps: 1.0
   annualization: 252
+  latency_bars: 0
+  max_abs_weight: 1.0
 
 strategy:
   name: moving_average
@@ -15,3 +18,15 @@ data:
   period: 2y
   interval: 1d
   auto_adjust: true
+
+analytics:
+  rolling_window: 20
+
+benchmark:
+  enabled: false
+  data:
+    source: yfinance
+    symbol: SPY
+    period: 2y
+    interval: 1d
+    auto_adjust: true

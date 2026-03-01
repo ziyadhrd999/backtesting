@@ -1,14 +1,40 @@
+import csv
+import json
+import platform
+from datetime import UTC, datetime
 from pathlib import Path
+from subprocess import CalledProcessError, check_output
 
-from analytics.tearsheet import make_tearsheet
+from analytics.tearsheet import make_tearsheet_with_details
 from data.loaders import load_csv, load_yfinance
 from engine.core.backtest_engine import BacktestEngine, EngineConfig
 from engine.utils.config import load_yaml
 from strategies.factory import build_strategy
 
 
-def load_bars(cfg: dict) -> list:
-    data_cfg = cfg.get("data", {})
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_bars(data_cfg: dict) -> list:
+    """Load market bars from configured data source.
+
+    Supports ``yfinance`` and ``csv`` source types and returns engine-compatible
+    market bar events.
+
+    Args:
+        data_cfg: Data configuration mapping (source, symbol, period/interval,
+            path, etc.).
+
+    Returns:
+        List of market bars.
+
+    Raises:
+        ValueError: If the ``source`` value is unsupported.
+
+    Example:
+        >>> load_bars({'source': 'csv', 'path': 'data.csv', 'symbol': 'S'})
+        [...]
+    """
     source = str(data_cfg.get("source", "yfinance")).lower().strip()
 
     if source == "yfinance":
@@ -26,23 +52,175 @@ def load_bars(cfg: dict) -> list:
     raise ValueError(f"Unsupported data source: {source}")
 
 
+def _git_commit() -> str:
+    """Return current Git commit SHA for this repository.
+
+    The function executes ``git rev-parse HEAD`` in repository root and returns
+    the hash string. If Git is unavailable or the command fails, it returns the
+    fallback value ``"unknown"``.
+
+    Returns:
+        Current commit hash string, or ``"unknown"`` when unavailable.
+
+    Example:
+        >>> isinstance(_git_commit(), str)
+        True
+    """
+    try:
+        return check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    except (CalledProcessError, FileNotFoundError):
+        return "unknown"
+
+
+def _persist_run(
+    cfg: dict,
+    metrics: dict,
+    timestamps: list[str],
+    equity_curve: list[float],
+    fills: list,
+    positions: list[float],
+    cash_series: list[float],
+) -> Path:
+    """Persist experiment artifacts to disk.
+
+    Writes config snapshot, summary metrics, run metadata, equity curve,
+    fill-level data, and position/cash time series into a timestamped run
+    directory under ``artifacts/runs``.
+
+    Args:
+        cfg: Full resolved runtime config.
+        metrics: Scalar performance/risk metrics.
+        timestamps: Bar timestamps aligned with position/cash series.
+        equity_curve: Equity values across the run.
+        fills: Fill event list.
+        positions: Position quantity series.
+        cash_series: Cash balance series.
+
+    Returns:
+        Path to the created run directory.
+
+    Example:
+        >>> isinstance(_persist_run({}, {}, [], [], [], [], []), Path)
+        True
+    """
+    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    strategy_name = str(cfg.get("strategy", {}).get("name", "strategy"))
+    run_dir = ROOT / "artifacts" / "runs" / f"{run_id}_{strategy_name}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    (run_dir / "config.snapshot.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    (run_dir / "metrics.summary.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+    run_meta = {
+        "run_id": run_id,
+        "created_at_utc": datetime.now(UTC).isoformat(),
+        "git_commit": _git_commit(),
+        "python": platform.python_version(),
+    }
+    (run_dir / "run_meta.json").write_text(json.dumps(run_meta, indent=2), encoding="utf-8")
+
+    with (run_dir / "equity_curve.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["index", "equity"])
+        for i, equity in enumerate(equity_curve):
+            writer.writerow([i, equity])
+
+    with (run_dir / "fills.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["timestamp", "symbol", "side", "quantity", "fill_price", "fee"])
+        for f in fills:
+            writer.writerow([f.timestamp, f.symbol, f.side, f.quantity, f.fill_price, f.fee])
+
+    with (run_dir / "positions.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["timestamp", "position_qty", "cash"])
+        for ts, qty, cash in zip(timestamps, positions, cash_series):
+            writer.writerow([ts, qty, cash])
+
+    return run_dir
+
+
 if __name__ == "__main__":
-    config_path = Path(__file__).resolve().parents[1] / "configs" / "default.yaml"
+    config_path = ROOT / "configs" / "default.yaml"
     cfg = load_yaml(config_path)
 
     engine_cfg = EngineConfig(
         initial_cash=float(cfg["engine"]["initial_cash"]),
         fee_bps=float(cfg["engine"]["fee_bps"]),
         slippage_bps=float(cfg["engine"]["slippage_bps"]),
+        spread_bps=float(cfg["engine"].get("spread_bps", 1.0)),
+        latency_bars=int(cfg["engine"].get("latency_bars", 0)),
+        max_abs_weight=float(cfg["engine"].get("max_abs_weight", 1.0)),
+        max_turnover_qty=cfg["engine"].get("max_turnover_qty"),
+        max_notional=cfg["engine"].get("max_notional"),
+        max_abs_exposure=cfg["engine"].get("max_abs_exposure"),
     )
 
     strategy_cfg = cfg.get("strategy", {})
     strategy = build_strategy(strategy_cfg.get("name", "moving_average"), strategy_cfg)
 
-    bars = load_bars(cfg)
+    bars = load_bars(cfg.get("data", {}))
     if not bars:
         raise RuntimeError("No bars were loaded. Check your data config.")
 
+    benchmark_cfg = cfg.get("benchmark")
+    benchmark_equity: list[float] | None = None
+    if benchmark_cfg and bool(benchmark_cfg.get("enabled", False)):
+        benchmark_bars = load_bars(benchmark_cfg.get("data", {}))
+        if benchmark_bars:
+            bh_engine = BacktestEngine(
+                EngineConfig(
+                    initial_cash=engine_cfg.initial_cash,
+                    fee_bps=0.0,
+                    slippage_bps=0.0,
+                    spread_bps=0.0,
+                )
+            )
+
+            class BuyAndHold:
+                """Simple benchmark strategy that always targets full long exposure.
+
+                Example:
+                    >>> BuyAndHold().on_bar(None)
+                    1.0
+                """
+
+                def on_bar(self, _market_event) -> float:
+                    """Return constant target weight for each incoming bar.
+
+                    Args:
+                        _market_event: Unused market event argument.
+
+                    Returns:
+                        Constant target weight ``1.0``.
+                    """
+                    return 1.0
+
+            benchmark_equity = bh_engine.run(benchmark_bars, BuyAndHold())
+
     engine = BacktestEngine(engine_cfg)
-    equity = engine.run(bars, strategy)
-    print(make_tearsheet(equity, annualization=int(cfg["engine"].get("annualization", 252))))
+    result = engine.run_detailed(bars, strategy)
+    prices = [bar.close for bar in bars][: len(result.positions)]
+
+    metrics = make_tearsheet_with_details(
+        result.equity_curve,
+        annualization=int(cfg["engine"].get("annualization", 252)),
+        fills=result.fills,
+        positions=result.positions,
+        prices=prices,
+        benchmark_equity=benchmark_equity,
+        rolling_window=int(cfg.get("analytics", {}).get("rolling_window", 20)),
+    )
+
+    run_dir = _persist_run(
+        cfg=cfg,
+        metrics=metrics,
+        timestamps=result.timestamps,
+        equity_curve=result.equity_curve,
+        fills=result.fills,
+        positions=result.positions,
+        cash_series=result.cash_series,
+    )
+
+    print(metrics)
+    print(f"Run artifacts written to: {run_dir}")
