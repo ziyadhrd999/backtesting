@@ -3,17 +3,23 @@ from engine.execution.fill_model import simulate_fill
 
 
 class SimBroker:
+    """Simple broker simulator that prices and fills MARKET/LIMIT/STOP orders."""
+
     def __init__(self, fee_bps: float, slippage_bps: float, spread_bps: float = 0.0) -> None:
-        """
-        Initializes the simulated broker with transaction fee, spread, and slippage parameters.
-        """
+        """Store fee/slippage/spread assumptions used by the fill model."""
         self.fee_bps = fee_bps
         self.slippage_bps = slippage_bps
         self.spread_bps = spread_bps
 
     def execute(self, order: OrderEvent, bar: MarketEvent) -> FillEvent | None:
-        """
-        Execute MARKET orders immediately on close and LIMIT orders when touched within bar range.
+        """Try to execute an order on a single bar.
+
+        - MARKET: fills at bar close.
+        - LIMIT: fills at limit price only if touched within bar range.
+        - STOP: triggers when crossed and fills at stop price.
+
+        Returns:
+            FillEvent when execution occurs, else None.
         """
         price: float | None
         if order.order_type == "MARKET":
@@ -27,6 +33,16 @@ class SimBroker:
             if not touched:
                 return None
             price = order.limit_price
+        elif order.order_type == "STOP":
+            if order.stop_price is None:
+                raise ValueError("STOP order requires stop_price")
+            triggered = (order.side == "BUY" and bar.high >= order.stop_price) or (
+                order.side == "SELL" and bar.low <= order.stop_price
+            )
+            if not triggered:
+                return None
+            # Stop order becomes a marketable order once triggered.
+            price = order.stop_price
         else:
             raise ValueError(f"Unsupported order_type: {order.order_type}")
 
