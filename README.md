@@ -81,3 +81,22 @@ Suggested workflow:
 
 - `experiments/run_backtest.py` now reads engine/strategy settings from `configs/default.yaml` (including spread/slippage/fees).
 - Strategy selection is centralized in `strategies/factory.py`.
+
+## Phase 5 updates (multi-asset + cash-only execution)
+
+- Strategy interface is now snapshot-based: strategies implement `on_bars(bars_by_symbol)` and return
+  target weights as a dictionary `{symbol: weight}`.
+- The engine now groups incoming bars by timestamp and rebalances using symbol baskets,
+  instead of processing one symbol-bar signal at a time.
+- Portfolio state is symbol-keyed (`positions`, `last_prices`) with per-symbol mark-to-market
+  and aggregated equity.
+- Built-in strategies (`moving_average`, `momentum`, `mean_reversion`) maintain per-symbol
+  rolling buffers and emit per-symbol targets.
+- Execution remains **cash-only** by default:
+  - buy orders are checked against available cash at execution time,
+  - oversized buy quantities are reduced to affordable size,
+  - cash is prevented from going below zero due to buys.
+
+Practical implication:
+- This simulator is currently designed for cash-feasible strategy validation first.
+- Leverage/margin behavior is intentionally not enabled in the default path.
