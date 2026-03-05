@@ -181,20 +181,20 @@ if __name__ == "__main__":
                 """Simple benchmark strategy that always targets full long exposure.
 
                 Example:
-                    >>> BuyAndHold().on_bar(None)
-                    1.0
+                    >>> BuyAndHold().on_bars({"S": object()})
+                    {'S': 1.0}
                 """
 
-                def on_bar(self, _market_event) -> float:
-                    """Return constant target weight for each incoming bar.
+                def on_bars(self, bars_by_symbol) -> dict[str, float]:
+                    """Return constant target weight for each symbol in the snapshot.
 
                     Args:
-                        _market_event: Unused market event argument.
+                        bars_by_symbol: Bars keyed by symbol.
 
                     Returns:
-                        Constant target weight ``1.0``.
+                        Symbol-keyed constant target weight ``1.0``.
                     """
-                    return 1.0
+                    return {symbol: 1.0 for symbol in bars_by_symbol}
 
             benchmark_equity = bh_engine.run(benchmark_bars, BuyAndHold())
 
