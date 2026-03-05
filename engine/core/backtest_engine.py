@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from itertools import groupby
 
 from engine.core.broker import SimBroker
 from engine.core.event import FillEvent, MarketEvent, OrderEvent
@@ -89,7 +90,7 @@ class RunResult:
 
 
 class BacktestEngine:
-    """Event-driven single-asset backtesting engine.
+    """Event-driven multi-asset backtesting engine.
 
     Args:
         config: Engine configuration controlling execution and risk behavior.
@@ -124,11 +125,11 @@ class BacktestEngine:
         self.cash_series: list[float] = []
         self.timestamp_series: list[str] = []
 
-    def _execute_ready_orders(self, bar: MarketEvent, bar_idx: int) -> None:
+    def _execute_ready_orders(self, bars_by_symbol: dict[str, MarketEvent], bar_idx: int) -> None:
         """Execute queued orders whose readiness index has been reached.
 
         Args:
-            bar: Current market bar used for trigger and fill checks.
+            bars_by_symbol: Current timestamp bars keyed by symbol.
             bar_idx: Integer index of the current bar in the run loop.
 
         Example:
@@ -142,7 +143,42 @@ class BacktestEngine:
                 still_pending.append(pending)
                 continue
 
-            fill = self.broker.execute(order=pending.order, bar=bar)
+            bar = bars_by_symbol.get(pending.order.symbol)
+            if bar is None:
+                still_pending.append(pending)
+                continue
+
+            order_to_execute = pending.order
+            if order_to_execute.side == "BUY":
+                fill_preview = self.broker.execute(order=order_to_execute, bar=bar)
+                if fill_preview is None:
+                    still_pending.append(pending)
+                    continue
+
+                required_cash = (fill_preview.quantity * fill_preview.fill_price) + fill_preview.fee
+                available_cash = self.portfolio.state.cash
+                if required_cash > available_cash:
+                    cost_per_unit = fill_preview.fill_price + (fill_preview.fee / fill_preview.quantity)
+                    if cost_per_unit <= 0:
+                        still_pending.append(pending)
+                        continue
+
+                    affordable_qty = available_cash / cost_per_unit
+                    if affordable_qty <= 1e-12:
+                        still_pending.append(pending)
+                        continue
+
+                    order_to_execute = OrderEvent(
+                        timestamp=order_to_execute.timestamp,
+                        symbol=order_to_execute.symbol,
+                        side=order_to_execute.side,
+                        quantity=min(order_to_execute.quantity, affordable_qty),
+                        order_type=order_to_execute.order_type,
+                        limit_price=order_to_execute.limit_price,
+                        stop_price=order_to_execute.stop_price,
+                    )
+
+            fill = self.broker.execute(order=order_to_execute, bar=bar)
             if fill is None:
                 # Keep conditional orders alive after their ready time.
                 still_pending.append(pending)
@@ -153,25 +189,34 @@ class BacktestEngine:
                 quantity=fill.quantity,
                 fill_price=fill.fill_price,
                 fee=fill.fee,
+                symbol=fill.symbol,
             )
             self.fill_events.append(fill)
 
         self.pending_orders = still_pending
+
+    def _timestamp_baskets(self, bars: list[MarketEvent]) -> list[tuple[str, dict[str, MarketEvent]]]:
+        """Group bars into timestamp snapshots keyed by symbol."""
+        baskets: list[tuple[str, dict[str, MarketEvent]]] = []
+        for timestamp, group in groupby(bars, key=lambda bar: bar.timestamp):
+            baskets.append((timestamp, {bar.symbol: bar for bar in group}))
+        return baskets
 
     def run(self, bars: list[MarketEvent], strategy) -> list[float]:
         """Run strategy over historical bars and return equity curve.
 
         Args:
             bars: Ordered sequence of :class:`MarketEvent` bars.
-            strategy: Strategy object exposing ``on_bar(bar) -> target_weight``.
+            strategy: Strategy object exposing
+                ``on_bars({symbol: bar, ...}) -> {symbol: target_weight}``.
 
         Returns:
             List of equity points produced by the portfolio over time.
 
         Example:
             >>> class BuyAndHold:
-            ...     def on_bar(self, market_event):
-            ...         return 1.0
+            ...     def on_bars(self, bars_by_symbol):
+            ...         return {symbol: 1.0 for symbol in bars_by_symbol}
             >>> bars = [MarketEvent(timestamp="t0", symbol="S", close=100.0)]
             >>> curve = BacktestEngine(EngineConfig()).run(bars, BuyAndHold())
             >>> isinstance(curve, list)
@@ -185,7 +230,8 @@ class BacktestEngine:
 
         Args:
             bars: Ordered sequence of market bars.
-            strategy: Strategy object exposing ``on_bar(bar) -> target_weight``.
+            strategy: Strategy object exposing
+                ``on_bars({symbol: bar, ...}) -> {symbol: target_weight}``.
 
         Returns:
             :class:`RunResult` with equity, fills, and bar-level state series.
@@ -199,50 +245,69 @@ class BacktestEngine:
         self.cash_series = []
         self.timestamp_series = []
 
-        for i, bar in enumerate(bars):
-            self.portfolio.mark_to_market(price=bar.close)
-            self._execute_ready_orders(bar=bar, bar_idx=i)
-            self.portfolio.mark_to_market(price=bar.close)
+        timestamp_baskets = self._timestamp_baskets(bars)
 
-            target_weight = strategy.on_bar(bar)
-            target_weight = apply_max_exposure(target_weight, max_abs_exposure=self.config.max_abs_exposure)
-            target_weight = clamp_weight(target_weight, max_abs_weight=self.config.max_abs_weight)
+        for i, (timestamp, bars_by_symbol) in enumerate(timestamp_baskets):
+            for symbol, bar in bars_by_symbol.items():
+                self.portfolio.mark_to_market(price=bar.close, symbol=symbol)
 
-            target_qty = target_qty_from_weight(
-                equity=self.portfolio.state.equity,
-                price=bar.close,
-                target_weight=target_weight,
-            )
-            target_qty = apply_max_notional(
-                target_qty=target_qty,
-                price=bar.close,
-                max_notional=self.config.max_notional,
-            )
-            target_qty = apply_turnover_limit(
-                target_qty=target_qty,
-                current_qty=self.portfolio.state.position_qty,
-                max_turnover_qty=self.config.max_turnover_qty,
-            )
+            self._execute_ready_orders(bars_by_symbol=bars_by_symbol, bar_idx=i)
 
-            delta = target_qty - self.portfolio.state.position_qty
-            if abs(delta) < 1e-9:
-                self.position_series.append(self.portfolio.state.position_qty)
-                self.cash_series.append(self.portfolio.state.cash)
-                self.timestamp_series.append(bar.timestamp)
-                continue
+            for symbol, bar in bars_by_symbol.items():
+                self.portfolio.mark_to_market(price=bar.close, symbol=symbol)
 
-            side = "BUY" if delta > 0 else "SELL"
-            order = OrderEvent(
-                timestamp=bar.timestamp,
-                symbol=bar.symbol,
-                side=side,
-                quantity=abs(delta),
-                order_type="MARKET",
-            )
-            self.pending_orders.append(PendingOrder(order=order, ready_at_index=i + latency))
-            self.position_series.append(self.portfolio.state.position_qty)
+            target_weights = strategy.on_bars(bars_by_symbol)
+            symbols_to_rebalance = set(bars_by_symbol.keys()) | set(self.portfolio.state.positions.keys())
+
+            rebalance_orders: list[OrderEvent] = []
+            for symbol in symbols_to_rebalance:
+                bar = bars_by_symbol.get(symbol)
+                if bar is None:
+                    continue
+
+                target_weight = float(target_weights.get(symbol, 0.0))
+                target_weight = apply_max_exposure(target_weight, max_abs_exposure=self.config.max_abs_exposure)
+                target_weight = clamp_weight(target_weight, max_abs_weight=self.config.max_abs_weight)
+
+                target_qty = target_qty_from_weight(
+                    equity=self.portfolio.state.equity,
+                    price=bar.close,
+                    target_weight=target_weight,
+                )
+                target_qty = apply_max_notional(
+                    target_qty=target_qty,
+                    price=bar.close,
+                    max_notional=self.config.max_notional,
+                )
+                current_qty = float(self.portfolio.state.positions.get(symbol, 0.0))
+                target_qty = apply_turnover_limit(
+                    target_qty=target_qty,
+                    current_qty=current_qty,
+                    max_turnover_qty=self.config.max_turnover_qty,
+                )
+
+                delta = target_qty - current_qty
+                if abs(delta) < 1e-9:
+                    continue
+
+                rebalance_orders.append(
+                    OrderEvent(
+                        timestamp=timestamp,
+                        symbol=symbol,
+                        side="BUY" if delta > 0 else "SELL",
+                        quantity=abs(delta),
+                        order_type="MARKET",
+                    )
+                )
+
+            sells = [order for order in rebalance_orders if order.side == "SELL"]
+            buys = [order for order in rebalance_orders if order.side == "BUY"]
+            for order in sells + buys:
+                self.pending_orders.append(PendingOrder(order=order, ready_at_index=i + latency))
+
+            self.position_series.append(sum(float(qty) for qty in self.portfolio.state.positions.values()))
             self.cash_series.append(self.portfolio.state.cash)
-            self.timestamp_series.append(bar.timestamp)
+            self.timestamp_series.append(timestamp)
 
         return RunResult(
             equity_curve=list(self.portfolio.equity_curve),
