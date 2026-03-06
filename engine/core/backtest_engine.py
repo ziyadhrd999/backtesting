@@ -27,6 +27,8 @@ class EngineConfig:
         max_turnover_qty: Max quantity change allowed per bar.
         max_notional: Max absolute notional exposure per asset.
         max_abs_exposure: Additional cap on absolute strategy exposure.
+        allow_short: Whether negative target weights and net short positions are allowed.
+            Defaults to ``False`` for long-only behavior.
 
     Example:
         >>> cfg = EngineConfig(initial_cash=50_000, latency_bars=1, max_notional=10_000)
@@ -45,6 +47,7 @@ class EngineConfig:
     max_turnover_qty: float | None = None
     max_notional: float | None = None
     max_abs_exposure: float | None = None
+    allow_short: bool = False
 
 
 @dataclass
@@ -149,6 +152,23 @@ class BacktestEngine:
                 continue
 
             order_to_execute = pending.order
+
+            if order_to_execute.side == "SELL" and not self.config.allow_short:
+                current_qty = float(self.portfolio.state.positions.get(order_to_execute.symbol, 0.0))
+                if current_qty <= 1e-12:
+                    continue
+
+                if order_to_execute.quantity > current_qty:
+                    order_to_execute = OrderEvent(
+                        timestamp=order_to_execute.timestamp,
+                        symbol=order_to_execute.symbol,
+                        side=order_to_execute.side,
+                        quantity=current_qty,
+                        order_type=order_to_execute.order_type,
+                        limit_price=order_to_execute.limit_price,
+                        stop_price=order_to_execute.stop_price,
+                    )
+
             if order_to_execute.side == "BUY":
                 fill_preview = self.broker.execute(order=order_to_execute, bar=bar)
                 if fill_preview is None:
@@ -268,6 +288,8 @@ class BacktestEngine:
                 target_weight = float(target_weights.get(symbol, 0.0))
                 target_weight = apply_max_exposure(target_weight, max_abs_exposure=self.config.max_abs_exposure)
                 target_weight = clamp_weight(target_weight, max_abs_weight=self.config.max_abs_weight)
+                if not self.config.allow_short:
+                    target_weight = max(0.0, target_weight)
 
                 target_qty = target_qty_from_weight(
                     equity=self.portfolio.state.equity,

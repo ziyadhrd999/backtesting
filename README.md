@@ -24,6 +24,14 @@ pytest
 python -m experiments.run_backtest  # uses configs/default.yaml
 ```
 
+> `source .venv/bin/activate` works on Linux/macOS shells.
+> For Windows PowerShell, run:
+>
+> ```powershell
+> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+> .\.venv\Scripts\Activate.ps1
+> ```
+
 ## Notebook flow
 
 1. `notebooks/01_data_exploration.ipynb`
@@ -95,8 +103,24 @@ Suggested workflow:
 - Execution remains **cash-only** by default:
   - buy orders are checked against available cash at execution time,
   - oversized buy quantities are reduced to affordable size,
-  - cash is prevented from going below zero due to buys.
+  - cash is prevented from going below zero due to buys,
+  - shorting is disabled by default (sell orders cannot exceed owned inventory).
 
 Practical implication:
 - This simulator is currently designed for cash-feasible strategy validation first.
 - Leverage/margin behavior is intentionally not enabled in the default path.
+
+
+### Long-only default and optional shorting
+
+- `EngineConfig` includes `allow_short` (default: `False`).
+- With the default long-only mode:
+  - negative strategy target weights are clamped to `0.0`,
+  - sell executions are capped to currently held inventory (no net short).
+- To enable shorting for research, set `allow_short: true` when constructing `EngineConfig`.
+
+### Series length note (multi-asset runs)
+
+- `timestamps` / `cash_series` / `positions` are recorded once per timestamp basket.
+- `equity_curve` is recorded on each mark-to-market call, which can happen multiple times per timestamp (and per symbol).
+- In multi-asset runs, it is therefore expected that `len(equity_curve)` can be larger than `len(timestamps)`.
