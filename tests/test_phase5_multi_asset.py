@@ -53,3 +53,32 @@ def test_cash_only_mode_prevents_negative_cash_on_buys():
 
     assert all(cash >= -1e-9 for cash in result.cash_series)
     assert engine.portfolio.state.cash >= -1e-9
+
+
+class ShortOnlyStrategy:
+    def on_bars(self, bars_by_symbol) -> dict[str, float]:
+        return {symbol: -1.0 for symbol in bars_by_symbol}
+
+
+def test_long_only_mode_blocks_short_targets_and_never_goes_negative_position():
+    engine = BacktestEngine(EngineConfig(initial_cash=1000, fee_bps=0, slippage_bps=0, spread_bps=0))
+    engine.run(_two_asset_bars(), ShortOnlyStrategy())
+
+    assert all(qty >= -1e-9 for qty in engine.portfolio.state.positions.values())
+    assert engine.portfolio.state.positions.get("AAPL", 0.0) == 0.0
+    assert engine.portfolio.state.positions.get("MSFT", 0.0) == 0.0
+
+
+class BuyThenFlipShortStrategy:
+    def on_bars(self, bars_by_symbol) -> dict[str, float]:
+        timestamp = next(iter(bars_by_symbol.values())).timestamp
+        if timestamp == "t0":
+            return {symbol: 1.0 for symbol in bars_by_symbol}
+        return {symbol: -1.0 for symbol in bars_by_symbol}
+
+
+def test_long_only_mode_caps_sell_to_current_inventory():
+    engine = BacktestEngine(EngineConfig(initial_cash=1000, fee_bps=0, slippage_bps=0, spread_bps=0))
+    engine.run(_two_asset_bars(), BuyThenFlipShortStrategy())
+
+    assert all(qty >= -1e-9 for qty in engine.portfolio.state.positions.values())
