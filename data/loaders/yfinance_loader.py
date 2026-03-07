@@ -41,7 +41,7 @@ def load_yfinance(
     for idx in close_s.dropna().index:
         bars.append(
             MarketEvent(
-                timestamp=idx.strftime("%Y-%m-%d"),
+                timestamp=idx.strftime("%Y-%m-%d %H:%M"),
                 symbol=symbol,
                 open=float(open_s.loc[idx]),
                 high=float(high_s.loc[idx]),
