@@ -24,6 +24,14 @@ pytest
 python -m experiments.run_backtest  # uses configs/default.yaml
 ```
 
+> `source .venv/bin/activate` works on Linux/macOS shells.
+> For Windows PowerShell, run:
+>
+> ```powershell
+> Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+> .\.venv\Scripts\Activate.ps1
+> ```
+
 ## Notebook flow
 
 1. `notebooks/01_data_exploration.ipynb`
@@ -81,3 +89,38 @@ Suggested workflow:
 
 - `experiments/run_backtest.py` now reads engine/strategy settings from `configs/default.yaml` (including spread/slippage/fees).
 - Strategy selection is centralized in `strategies/factory.py`.
+
+## Phase 5 updates (multi-asset + cash-only execution)
+
+- Strategy interface is now snapshot-based: strategies implement `on_bars(bars_by_symbol)` and return
+  target weights as a dictionary `{symbol: weight}`.
+- The engine now groups incoming bars by timestamp and rebalances using symbol baskets,
+  instead of processing one symbol-bar signal at a time.
+- Portfolio state is symbol-keyed (`positions`, `last_prices`) with per-symbol mark-to-market
+  and aggregated equity.
+- Built-in strategies (`moving_average`, `momentum`, `mean_reversion`) maintain per-symbol
+  rolling buffers and emit per-symbol targets.
+- Execution remains **cash-only** by default:
+  - buy orders are checked against available cash at execution time,
+  - oversized buy quantities are reduced to affordable size,
+  - cash is prevented from going below zero due to buys,
+  - shorting is disabled by default (sell orders cannot exceed owned inventory).
+
+Practical implication:
+- This simulator is currently designed for cash-feasible strategy validation first.
+- Leverage/margin behavior is intentionally not enabled in the default path.
+
+
+### Long-only default and optional shorting
+
+- `EngineConfig` includes `allow_short` (default: `False`).
+- With the default long-only mode:
+  - negative strategy target weights are clamped to `0.0`,
+  - sell executions are capped to currently held inventory (no net short).
+- To enable shorting for research, set `allow_short: true` when constructing `EngineConfig`.
+
+### Series length note (multi-asset runs)
+
+- `timestamps` / `cash_series` / `positions` are recorded once per timestamp basket.
+- `equity_curve` is recorded on each mark-to-market call, which can happen multiple times per timestamp (and per symbol).
+- In multi-asset runs, it is therefore expected that `len(equity_curve)` can be larger than `len(timestamps)`.

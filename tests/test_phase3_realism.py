@@ -6,8 +6,9 @@ class ConstantWeightStrategy:
     def __init__(self, weight: float) -> None:
         self.weight = weight
 
-    def on_bar(self, market_event) -> float:
-        return self.weight
+    def on_bars(self, bars_by_symbol) -> dict[str, float]:
+        symbol = next(iter(bars_by_symbol.keys()))
+        return {symbol: self.weight}
 
 
 def _bars(n: int, price: float = 100.0) -> list[MarketEvent]:
