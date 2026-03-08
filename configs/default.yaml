@@ -6,6 +6,9 @@ engine:
   annualization: 252
   latency_bars: 0
   max_abs_weight: 1.0
+  allow_short: false
+  borrow_rate_bps: 0.0
+  financing_bars_per_year: 252
 
 strategy:
   name: moving_average

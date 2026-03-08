@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from itertools import groupby
 
+from engine.accounting import AccountingLedger
 from engine.core.broker import SimBroker
 from engine.core.event import FillEvent, MarketEvent, OrderEvent
 from engine.core.portfolio import Portfolio
@@ -48,6 +49,8 @@ class EngineConfig:
     max_notional: float | None = None
     max_abs_exposure: float | None = None
     allow_short: bool = False
+    borrow_rate_bps: float = 0.0
+    financing_bars_per_year: int = 252
 
 
 @dataclass
@@ -90,6 +93,10 @@ class RunResult:
     positions: list[float]
     cash_series: list[float]
     timestamps: list[str]
+    positions_by_symbol: list[dict[str, float | str]]
+    portfolio_history: list[dict[str, float | str]]
+    journal: list[dict[str, float | str]]
+    trade_attribution: list[dict[str, float | str]]
 
 
 class BacktestEngine:
@@ -127,6 +134,7 @@ class BacktestEngine:
         self.position_series: list[float] = []
         self.cash_series: list[float] = []
         self.timestamp_series: list[str] = []
+        self.ledger = AccountingLedger(initial_cash=config.initial_cash, borrow_rate_bps=config.borrow_rate_bps, financing_bars_per_year=config.financing_bars_per_year)
 
     def _execute_ready_orders(self, bars_by_symbol: dict[str, MarketEvent], bar_idx: int) -> None:
         """Execute queued orders whose readiness index has been reached.
@@ -211,6 +219,7 @@ class BacktestEngine:
                 fee=fill.fee,
                 symbol=fill.symbol,
             )
+            self.ledger.on_fill(fill)
             self.fill_events.append(fill)
 
         self.pending_orders = still_pending
@@ -264,6 +273,11 @@ class BacktestEngine:
         self.position_series = []
         self.cash_series = []
         self.timestamp_series = []
+        self.ledger = AccountingLedger(
+            initial_cash=self.config.initial_cash,
+            borrow_rate_bps=self.config.borrow_rate_bps,
+            financing_bars_per_year=self.config.financing_bars_per_year,
+        )
 
         timestamp_baskets = self._timestamp_baskets(bars)
 
@@ -331,10 +345,38 @@ class BacktestEngine:
             self.cash_series.append(self.portfolio.state.cash)
             self.timestamp_series.append(timestamp)
 
+            self.ledger.on_mark(
+                timestamp=timestamp,
+                prices_by_symbol={symbol: bar.close for symbol, bar in bars_by_symbol.items()},
+                cash=self.portfolio.state.cash,
+            )
+
         return RunResult(
             equity_curve=list(self.portfolio.equity_curve),
             fills=list(self.fill_events),
             positions=list(self.position_series),
             cash_series=list(self.cash_series),
             timestamps=list(self.timestamp_series),
+            positions_by_symbol=list(self.ledger.positions_by_symbol),
+            portfolio_history=[
+                {
+                    "timestamp": snap.timestamp,
+                    "cash": snap.cash,
+                    "equity": snap.equity,
+                    "gross_exposure": snap.gross_exposure,
+                    "net_exposure": snap.net_exposure,
+                }
+                for snap in self.ledger.portfolio_history
+            ],
+            journal=[
+                {
+                    "timestamp": entry.timestamp,
+                    "symbol": entry.symbol,
+                    "entry_type": entry.entry_type,
+                    "amount": entry.amount,
+                    "details": entry.details,
+                }
+                for entry in self.ledger.journal_entries
+            ],
+            trade_attribution=list(self.ledger.trade_attribution),
         )
