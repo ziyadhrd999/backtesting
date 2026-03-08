@@ -80,6 +80,10 @@ def _persist_run(
     fills: list,
     positions: list[float],
     cash_series: list[float],
+    positions_by_symbol: list[dict[str, float | str]],
+    portfolio_history: list[dict[str, float | str]],
+    journal: list[dict[str, float | str]],
+    trade_attribution: list[dict[str, float | str]],
 ) -> Path:
     """Persist experiment artifacts to disk.
 
@@ -137,6 +141,74 @@ def _persist_run(
         for ts, qty, cash in zip(timestamps, positions, cash_series):
             writer.writerow([ts, qty, cash])
 
+
+    with (run_dir / "positions_by_symbol.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow([
+            "timestamp",
+            "symbol",
+            "quantity",
+            "avg_cost",
+            "last_price",
+            "market_value",
+            "realized_pnl",
+            "unrealized_pnl",
+            "total_pnl",
+            "fees_paid",
+            "financing_paid",
+        ])
+        for row in positions_by_symbol:
+            writer.writerow([
+                row.get("timestamp", ""),
+                row.get("symbol", ""),
+                row.get("quantity", 0.0),
+                row.get("avg_cost", 0.0),
+                row.get("last_price", 0.0),
+                row.get("market_value", 0.0),
+                row.get("realized_pnl", 0.0),
+                row.get("unrealized_pnl", 0.0),
+                row.get("total_pnl", 0.0),
+                row.get("fees_paid", 0.0),
+                row.get("financing_paid", 0.0),
+            ])
+
+    with (run_dir / "portfolio_history.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["timestamp", "cash", "equity", "gross_exposure", "net_exposure"])
+        for row in portfolio_history:
+            writer.writerow([
+                row.get("timestamp", ""),
+                row.get("cash", 0.0),
+                row.get("equity", 0.0),
+                row.get("gross_exposure", 0.0),
+                row.get("net_exposure", 0.0),
+            ])
+
+    with (run_dir / "ledger_journal.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["timestamp", "symbol", "entry_type", "amount", "details"])
+        for row in journal:
+            writer.writerow([
+                row.get("timestamp", ""),
+                row.get("symbol", ""),
+                row.get("entry_type", ""),
+                row.get("amount", 0.0),
+                row.get("details", ""),
+            ])
+
+    with (run_dir / "trade_attribution.csv").open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["timestamp", "symbol", "closed_qty", "realized_pnl", "fill_price", "avg_cost_before"])
+        for row in trade_attribution:
+            writer.writerow([
+                row.get("timestamp", ""),
+                row.get("symbol", ""),
+                row.get("closed_qty", 0.0),
+                row.get("realized_pnl", 0.0),
+                row.get("fill_price", 0.0),
+                row.get("avg_cost_before", 0.0),
+            ])
+
     return run_dir
 
 
@@ -154,6 +226,9 @@ if __name__ == "__main__":
         max_turnover_qty=cfg["engine"].get("max_turnover_qty"),
         max_notional=cfg["engine"].get("max_notional"),
         max_abs_exposure=cfg["engine"].get("max_abs_exposure"),
+        allow_short=bool(cfg["engine"].get("allow_short", False)),
+        borrow_rate_bps=float(cfg["engine"].get("borrow_rate_bps", 0.0)),
+        financing_bars_per_year=int(cfg["engine"].get("financing_bars_per_year", 252)),
     )
 
     strategy_cfg = cfg.get("strategy", {})
@@ -220,6 +295,10 @@ if __name__ == "__main__":
         fills=result.fills,
         positions=result.positions,
         cash_series=result.cash_series,
+        positions_by_symbol=result.positions_by_symbol,
+        portfolio_history=result.portfolio_history,
+        journal=result.journal,
+        trade_attribution=result.trade_attribution,
     )
 
     print(metrics)

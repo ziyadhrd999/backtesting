@@ -48,6 +48,7 @@ python -m experiments.run_backtest  # uses configs/default.yaml
 ## Phase 4 workflow additions
 
 - `experiments/run_backtest.py` now persists run artifacts (`config.snapshot.json`, `metrics.summary.json`, `equity_curve.csv`, `fills.csv`, `positions.csv`) under `artifacts/runs/...`.
+- Run artifacts now also include accounting outputs (`positions_by_symbol.csv`, `portfolio_history.csv`, `ledger_journal.csv`, `trade_attribution.csv`) for auditability.
 - Extended analytics include trade count/win rate, exposure, turnover, rolling Sharpe summary, and drawdown duration.
 - Optional benchmark comparison can be enabled in `configs/default.yaml`.
 - `experiments/run_cost_sensitivity.py` sweeps fee/slippage/spread assumptions and prints comparative metrics.
