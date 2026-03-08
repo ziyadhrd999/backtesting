@@ -229,6 +229,9 @@ if __name__ == "__main__":
         allow_short=bool(cfg["engine"].get("allow_short", False)),
         borrow_rate_bps=float(cfg["engine"].get("borrow_rate_bps", 0.0)),
         financing_bars_per_year=int(cfg["engine"].get("financing_bars_per_year", 252)),
+        stop_loss_mode=cfg["engine"].get("stop_loss_mode"),
+        stop_loss_value=cfg["engine"].get("stop_loss_value"),
+        stop_cooldown_bars=int(cfg["engine"].get("stop_cooldown_bars", 0)),
     )
 
     strategy_cfg = cfg.get("strategy", {})

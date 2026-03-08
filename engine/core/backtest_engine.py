@@ -51,6 +51,9 @@ class EngineConfig:
     allow_short: bool = False
     borrow_rate_bps: float = 0.0
     financing_bars_per_year: int = 252
+    stop_loss_mode: str | None = None
+    stop_loss_value: float | None = None
+    stop_cooldown_bars: int = 0
 
 
 @dataclass
@@ -135,6 +138,7 @@ class BacktestEngine:
         self.cash_series: list[float] = []
         self.timestamp_series: list[str] = []
         self.ledger = AccountingLedger(initial_cash=config.initial_cash, borrow_rate_bps=config.borrow_rate_bps, financing_bars_per_year=config.financing_bars_per_year)
+        self.cooldown_until_index: dict[str, int] = {}
 
     def _execute_ready_orders(self, bars_by_symbol: dict[str, MarketEvent], bar_idx: int) -> None:
         """Execute queued orders whose readiness index has been reached.
@@ -231,6 +235,44 @@ class BacktestEngine:
             baskets.append((timestamp, {bar.symbol: bar for bar in group}))
         return baskets
 
+    def _stop_loss_triggered(self, *, symbol: str, price: float) -> bool:
+        mode = (self.config.stop_loss_mode or "").lower().strip()
+        threshold = self.config.stop_loss_value
+        if mode not in {"pct", "notional"} or threshold is None or threshold <= 0:
+            return False
+
+        state = self.ledger.symbol_state(symbol)
+        qty = float(state.quantity)
+        if abs(qty) <= 1e-12:
+            return False
+
+        avg_cost = float(state.avg_cost)
+        if avg_cost <= 0:
+            return False
+
+        if qty > 0:
+            unrealized_loss = max(0.0, (avg_cost - price) * qty)
+            loss_pct = max(0.0, (avg_cost - price) / avg_cost)
+        else:
+            unrealized_loss = max(0.0, (price - avg_cost) * abs(qty))
+            loss_pct = max(0.0, (price - avg_cost) / avg_cost)
+
+        if mode == "notional":
+            return unrealized_loss >= float(threshold)
+        return loss_pct >= float(threshold)
+
+    def _forced_stop_order(self, *, timestamp: str, symbol: str, current_qty: float) -> OrderEvent | None:
+        if abs(current_qty) <= 1e-12:
+            return None
+        side = "SELL" if current_qty > 0 else "BUY"
+        return OrderEvent(
+            timestamp=timestamp,
+            symbol=symbol,
+            side=side,
+            quantity=abs(current_qty),
+            order_type="MARKET",
+        )
+
     def run(self, bars: list[MarketEvent], strategy) -> list[float]:
         """Run strategy over historical bars and return equity curve.
 
@@ -278,6 +320,7 @@ class BacktestEngine:
             borrow_rate_bps=self.config.borrow_rate_bps,
             financing_bars_per_year=self.config.financing_bars_per_year,
         )
+        self.cooldown_until_index = {}
 
         timestamp_baskets = self._timestamp_baskets(bars)
 
@@ -294,12 +337,35 @@ class BacktestEngine:
             symbols_to_rebalance = set(bars_by_symbol.keys()) | set(self.portfolio.state.positions.keys())
 
             rebalance_orders: list[OrderEvent] = []
+            forced_symbols: set[str] = set()
+            cooldown_bars = max(0, int(self.config.stop_cooldown_bars))
+            for symbol, bar in bars_by_symbol.items():
+                current_qty = float(self.portfolio.state.positions.get(symbol, 0.0))
+                if abs(current_qty) <= 1e-12:
+                    continue
+                if not self._stop_loss_triggered(symbol=symbol, price=bar.close):
+                    continue
+
+                force_order = self._forced_stop_order(timestamp=timestamp, symbol=symbol, current_qty=current_qty)
+                if force_order is None:
+                    continue
+
+                rebalance_orders.append(force_order)
+                forced_symbols.add(symbol)
+                if cooldown_bars > 0:
+                    self.cooldown_until_index[symbol] = i + cooldown_bars
+
             for symbol in symbols_to_rebalance:
                 bar = bars_by_symbol.get(symbol)
                 if bar is None:
                     continue
 
                 target_weight = float(target_weights.get(symbol, 0.0))
+                cooldown_until = int(self.cooldown_until_index.get(symbol, -1))
+                in_cooldown = i < cooldown_until
+                if symbol in forced_symbols or in_cooldown:
+                    target_weight = 0.0
+
                 target_weight = apply_max_exposure(target_weight, max_abs_exposure=self.config.max_abs_exposure)
                 target_weight = clamp_weight(target_weight, max_abs_weight=self.config.max_abs_weight)
                 if not self.config.allow_short:
@@ -324,6 +390,8 @@ class BacktestEngine:
 
                 delta = target_qty - current_qty
                 if abs(delta) < 1e-9:
+                    continue
+                if symbol in forced_symbols:
                     continue
 
                 rebalance_orders.append(

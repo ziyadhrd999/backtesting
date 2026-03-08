@@ -120,6 +120,14 @@ Practical implication:
   - sell executions are capped to currently held inventory (no net short).
 - To enable shorting for research, set `allow_short: true` when constructing `EngineConfig`.
 
+### Optional stop-loss with cooldown
+
+- `EngineConfig` also supports optional per-symbol stop-loss controls:
+  - `stop_loss_mode`: `pct` or `notional`
+  - `stop_loss_value`: threshold (fraction for `pct`, dollars for `notional`)
+  - `stop_cooldown_bars`: number of bars to keep the symbol flat after liquidation
+- When configured and breached, the engine liquidates the symbol and blocks re-entry until cooldown expires.
+
 ### Series length note (multi-asset runs)
 
 - `timestamps` / `cash_series` / `positions` are recorded once per timestamp basket.
