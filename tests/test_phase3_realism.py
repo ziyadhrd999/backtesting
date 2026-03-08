@@ -83,3 +83,26 @@ def test_max_abs_exposure_clamps_signal_before_sizing():
 
     # 20% of 10,000 at 100 price -> 20 shares target.
     assert engine.portfolio.state.position_qty == 20.0
+
+
+def test_max_drawdown_liquidates_and_blocks_new_buys():
+    bars = [
+        MarketEvent(timestamp="t0", symbol="S", open=100.0, high=100.0, low=100.0, close=100.0, volume=1000),
+        MarketEvent(timestamp="t1", symbol="S", open=100.0, high=100.0, low=100.0, close=100.0, volume=1000),
+        MarketEvent(timestamp="t2", symbol="S", open=80.0, high=80.0, low=80.0, close=80.0, volume=1000),
+        MarketEvent(timestamp="t3", symbol="S", open=80.0, high=80.0, low=80.0, close=80.0, volume=1000),
+    ]
+    engine = BacktestEngine(
+        EngineConfig(
+            initial_cash=1_000,
+            fee_bps=0,
+            slippage_bps=0,
+            spread_bps=0,
+            max_drawdown_pct=0.10,
+        )
+    )
+
+    engine.run_detailed(bars, ConstantWeightStrategy(1.0))
+
+    assert engine.portfolio.state.position_qty == 0.0
+    assert [fill.side for fill in engine.fill_events] == ["BUY", "SELL"]

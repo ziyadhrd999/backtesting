@@ -28,6 +28,10 @@ class EngineConfig:
         max_turnover_qty: Max quantity change allowed per bar.
         max_notional: Max absolute notional exposure per asset.
         max_abs_exposure: Additional cap on absolute strategy exposure.
+        max_drawdown_pct: Maximum allowed drawdown as a decimal fraction.
+            When current drawdown falls below ``-max_drawdown_pct``, the engine
+            liquidates long positions and blocks new risk for the remainder of
+            the run.
         allow_short: Whether negative target weights and net short positions are allowed.
             Defaults to ``False`` for long-only behavior.
 
@@ -48,6 +52,7 @@ class EngineConfig:
     max_turnover_qty: float | None = None
     max_notional: float | None = None
     max_abs_exposure: float | None = None
+    max_drawdown_pct: float | None = None
     allow_short: bool = False
     borrow_rate_bps: float = 0.0
     financing_bars_per_year: int = 252
@@ -280,17 +285,35 @@ class BacktestEngine:
         )
 
         timestamp_baskets = self._timestamp_baskets(bars)
+        peak_equity = self.portfolio.state.equity
+        drawdown_liquidation_triggered = False
 
         for i, (timestamp, bars_by_symbol) in enumerate(timestamp_baskets):
             for symbol, bar in bars_by_symbol.items():
                 self.portfolio.mark_to_market(price=bar.close, symbol=symbol)
+
+            if self.portfolio.state.equity > peak_equity:
+                peak_equity = self.portfolio.state.equity
+
+            max_drawdown_pct = self.config.max_drawdown_pct
+            if (
+                max_drawdown_pct is not None
+                and max_drawdown_pct > 0
+                and peak_equity > 0
+                and not drawdown_liquidation_triggered
+            ):
+                current_drawdown = (self.portfolio.state.equity / peak_equity) - 1.0
+                drawdown_liquidation_triggered = current_drawdown <= -max_drawdown_pct
+
+            if drawdown_liquidation_triggered:
+                self.pending_orders = [pending for pending in self.pending_orders if pending.order.side == "SELL"]
 
             self._execute_ready_orders(bars_by_symbol=bars_by_symbol, bar_idx=i)
 
             for symbol, bar in bars_by_symbol.items():
                 self.portfolio.mark_to_market(price=bar.close, symbol=symbol)
 
-            target_weights = strategy.on_bars(bars_by_symbol)
+            target_weights = {} if drawdown_liquidation_triggered else strategy.on_bars(bars_by_symbol)
             symbols_to_rebalance = set(bars_by_symbol.keys()) | set(self.portfolio.state.positions.keys())
 
             rebalance_orders: list[OrderEvent] = []
