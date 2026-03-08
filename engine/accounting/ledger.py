@@ -61,6 +61,13 @@ class AccountingLedger:
     def _state(self, symbol: str) -> SymbolAccountingState:
         return self._states.setdefault(symbol, SymbolAccountingState())
 
+    def symbol_state(self, symbol: str) -> SymbolAccountingState:
+        """Return mutable accounting state for a symbol.
+
+        Exposes current quantity/cost basis for engine-level risk controls.
+        """
+        return self._state(symbol)
+
     def on_fill(self, fill: FillEvent) -> None:
         """Apply a fill to cost-basis and realized-PnL accounting.
 
