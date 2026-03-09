@@ -128,6 +128,14 @@ Practical implication:
   - `stop_cooldown_bars`: number of bars to keep the symbol flat after liquidation
 - When configured and breached, the engine liquidates the symbol and blocks re-entry until cooldown expires.
 
+### Optional daily trade cap
+
+- `EngineConfig` supports optional daily fill caps:
+  - `max_trades_per_day`: maximum number of executed fills allowed per day
+  - `trade_cap_side`: `buy`, `sell`, or `both`
+- Cap accounting is based on **executed fills**, grouped by timestamp day.
+- Forced stop-loss exits remain safety actions and are not blocked by the daily cap.
+
 ### Series length note (multi-asset runs)
 
 - `timestamps` / `cash_series` / `positions` are recorded once per timestamp basket.

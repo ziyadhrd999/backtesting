@@ -54,6 +54,8 @@ class EngineConfig:
     stop_loss_mode: str | None = None
     stop_loss_value: float | None = None
     stop_cooldown_bars: int = 0
+    max_trades_per_day: int | None = None
+    trade_cap_side: str = "both"
 
 
 @dataclass
@@ -72,6 +74,7 @@ class PendingOrder:
 
     order: OrderEvent
     ready_at_index: int
+    is_forced_exit: bool = False
 
 
 @dataclass
@@ -139,6 +142,37 @@ class BacktestEngine:
         self.timestamp_series: list[str] = []
         self.ledger = AccountingLedger(initial_cash=config.initial_cash, borrow_rate_bps=config.borrow_rate_bps, financing_bars_per_year=config.financing_bars_per_year)
         self.cooldown_until_index: dict[str, int] = {}
+        self.current_day_key: str | None = None
+        self.daily_trade_counts: dict[str, int] = {"BUY": 0, "SELL": 0, "TOTAL": 0}
+
+    def _day_key(self, timestamp: str) -> str:
+        normalized = timestamp.replace(" ", "T")
+        return normalized.split("T", 1)[0]
+
+    def _reset_trade_counter_if_new_day(self, timestamp: str) -> None:
+        day_key = self._day_key(timestamp)
+        if self.current_day_key != day_key:
+            self.current_day_key = day_key
+            self.daily_trade_counts = {"BUY": 0, "SELL": 0, "TOTAL": 0}
+
+    def _trade_cap_reached(self, side: str) -> bool:
+        cap = self.config.max_trades_per_day
+        if cap is None or cap <= 0:
+            return False
+
+        mode = (self.config.trade_cap_side or "both").strip().lower()
+        if mode not in {"buy", "sell", "both"}:
+            mode = "both"
+
+        side_key = side.upper()
+        if mode == "buy" and side_key != "BUY":
+            return False
+        if mode == "sell" and side_key != "SELL":
+            return False
+
+        if mode == "both":
+            return self.daily_trade_counts.get("TOTAL", 0) >= int(cap)
+        return self.daily_trade_counts.get(side_key, 0) >= int(cap)
 
     def _execute_ready_orders(self, bars_by_symbol: dict[str, MarketEvent], bar_idx: int) -> None:
         """Execute queued orders whose readiness index has been reached.
@@ -164,6 +198,9 @@ class BacktestEngine:
                 continue
 
             order_to_execute = pending.order
+
+            if (not pending.is_forced_exit) and self._trade_cap_reached(order_to_execute.side):
+                continue
 
             if order_to_execute.side == "SELL" and not self.config.allow_short:
                 current_qty = float(self.portfolio.state.positions.get(order_to_execute.symbol, 0.0))
@@ -225,6 +262,9 @@ class BacktestEngine:
             )
             self.ledger.on_fill(fill)
             self.fill_events.append(fill)
+            if not pending.is_forced_exit:
+                self.daily_trade_counts[fill.side] = self.daily_trade_counts.get(fill.side, 0) + 1
+                self.daily_trade_counts["TOTAL"] = self.daily_trade_counts.get("TOTAL", 0) + 1
 
         self.pending_orders = still_pending
 
@@ -321,10 +361,13 @@ class BacktestEngine:
             financing_bars_per_year=self.config.financing_bars_per_year,
         )
         self.cooldown_until_index = {}
+        self.current_day_key = None
+        self.daily_trade_counts = {"BUY": 0, "SELL": 0, "TOTAL": 0}
 
         timestamp_baskets = self._timestamp_baskets(bars)
 
         for i, (timestamp, bars_by_symbol) in enumerate(timestamp_baskets):
+            self._reset_trade_counter_if_new_day(timestamp)
             for symbol, bar in bars_by_symbol.items():
                 self.portfolio.mark_to_market(price=bar.close, symbol=symbol)
 
@@ -407,7 +450,9 @@ class BacktestEngine:
             sells = [order for order in rebalance_orders if order.side == "SELL"]
             buys = [order for order in rebalance_orders if order.side == "BUY"]
             for order in sells + buys:
-                self.pending_orders.append(PendingOrder(order=order, ready_at_index=i + latency))
+                self.pending_orders.append(
+                    PendingOrder(order=order, ready_at_index=i + latency, is_forced_exit=order.symbol in forced_symbols)
+                )
 
             self.position_series.append(sum(float(qty) for qty in self.portfolio.state.positions.values()))
             self.cash_series.append(self.portfolio.state.cash)

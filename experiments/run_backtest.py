@@ -232,6 +232,8 @@ if __name__ == "__main__":
         stop_loss_mode=cfg["engine"].get("stop_loss_mode"),
         stop_loss_value=cfg["engine"].get("stop_loss_value"),
         stop_cooldown_bars=int(cfg["engine"].get("stop_cooldown_bars", 0)),
+        max_trades_per_day=cfg["engine"].get("max_trades_per_day"),
+        trade_cap_side=str(cfg["engine"].get("trade_cap_side", "both")),
     )
 
     strategy_cfg = cfg.get("strategy", {})

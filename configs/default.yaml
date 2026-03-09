@@ -12,6 +12,8 @@ engine:
   stop_loss_mode: null
   stop_loss_value: null
   stop_cooldown_bars: 0
+  max_trades_per_day: null
+  trade_cap_side: both
 
 strategy:
   name: moving_average
