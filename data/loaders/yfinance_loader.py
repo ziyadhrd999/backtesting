@@ -17,6 +17,8 @@ def load_yfinance(
     period: str = "2y",
     interval: str = "1d",
     auto_adjust: bool = True,
+    prepost: bool = True,
+    progress: bool = False,
 ) -> list[MarketEvent]:
     import yfinance as yf  # type: ignore
 
@@ -25,7 +27,8 @@ def load_yfinance(
         period=period,
         interval=interval,
         auto_adjust=auto_adjust,
-        progress=False,
+        progress=progress,
+        prepost=prepost,
     )
 
     if market is None or market.empty:

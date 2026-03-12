@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from itertools import groupby
 
+from engine.accounting import AccountingLedger
 from engine.core.broker import SimBroker
 from engine.core.event import FillEvent, MarketEvent, OrderEvent
 from engine.core.portfolio import Portfolio
@@ -48,6 +49,13 @@ class EngineConfig:
     max_notional: float | None = None
     max_abs_exposure: float | None = None
     allow_short: bool = False
+    borrow_rate_bps: float = 0.0
+    financing_bars_per_year: int = 252
+    stop_loss_mode: str | None = None
+    stop_loss_value: float | None = None
+    stop_cooldown_bars: int = 0
+    max_trades_per_day: int | None = None
+    trade_cap_side: str = "both"
 
 
 @dataclass
@@ -66,6 +74,7 @@ class PendingOrder:
 
     order: OrderEvent
     ready_at_index: int
+    is_forced_exit: bool = False
 
 
 @dataclass
@@ -90,6 +99,10 @@ class RunResult:
     positions: list[float]
     cash_series: list[float]
     timestamps: list[str]
+    positions_by_symbol: list[dict[str, float | str]]
+    portfolio_history: list[dict[str, float | str]]
+    journal: list[dict[str, float | str]]
+    trade_attribution: list[dict[str, float | str]]
 
 
 class BacktestEngine:
@@ -127,6 +140,39 @@ class BacktestEngine:
         self.position_series: list[float] = []
         self.cash_series: list[float] = []
         self.timestamp_series: list[str] = []
+        self.ledger = AccountingLedger(initial_cash=config.initial_cash, borrow_rate_bps=config.borrow_rate_bps, financing_bars_per_year=config.financing_bars_per_year)
+        self.cooldown_until_index: dict[str, int] = {}
+        self.current_day_key: str | None = None
+        self.daily_trade_counts: dict[str, int] = {"BUY": 0, "SELL": 0, "TOTAL": 0}
+
+    def _day_key(self, timestamp: str) -> str:
+        normalized = timestamp.replace(" ", "T")
+        return normalized.split("T", 1)[0]
+
+    def _reset_trade_counter_if_new_day(self, timestamp: str) -> None:
+        day_key = self._day_key(timestamp)
+        if self.current_day_key != day_key:
+            self.current_day_key = day_key
+            self.daily_trade_counts = {"BUY": 0, "SELL": 0, "TOTAL": 0}
+
+    def _trade_cap_reached(self, side: str) -> bool:
+        cap = self.config.max_trades_per_day
+        if cap is None or cap <= 0:
+            return False
+
+        mode = (self.config.trade_cap_side or "both").strip().lower()
+        if mode not in {"buy", "sell", "both"}:
+            mode = "both"
+
+        side_key = side.upper()
+        if mode == "buy" and side_key != "BUY":
+            return False
+        if mode == "sell" and side_key != "SELL":
+            return False
+
+        if mode == "both":
+            return self.daily_trade_counts.get("TOTAL", 0) >= int(cap)
+        return self.daily_trade_counts.get(side_key, 0) >= int(cap)
 
     def _execute_ready_orders(self, bars_by_symbol: dict[str, MarketEvent], bar_idx: int) -> None:
         """Execute queued orders whose readiness index has been reached.
@@ -152,6 +198,9 @@ class BacktestEngine:
                 continue
 
             order_to_execute = pending.order
+
+            if (not pending.is_forced_exit) and self._trade_cap_reached(order_to_execute.side):
+                continue
 
             if order_to_execute.side == "SELL" and not self.config.allow_short:
                 current_qty = float(self.portfolio.state.positions.get(order_to_execute.symbol, 0.0))
@@ -211,7 +260,11 @@ class BacktestEngine:
                 fee=fill.fee,
                 symbol=fill.symbol,
             )
+            self.ledger.on_fill(fill)
             self.fill_events.append(fill)
+            if not pending.is_forced_exit:
+                self.daily_trade_counts[fill.side] = self.daily_trade_counts.get(fill.side, 0) + 1
+                self.daily_trade_counts["TOTAL"] = self.daily_trade_counts.get("TOTAL", 0) + 1
 
         self.pending_orders = still_pending
 
@@ -221,6 +274,44 @@ class BacktestEngine:
         for timestamp, group in groupby(bars, key=lambda bar: bar.timestamp):
             baskets.append((timestamp, {bar.symbol: bar for bar in group}))
         return baskets
+
+    def _stop_loss_triggered(self, *, symbol: str, price: float) -> bool:
+        mode = (self.config.stop_loss_mode or "").lower().strip()
+        threshold = self.config.stop_loss_value
+        if mode not in {"pct", "notional"} or threshold is None or threshold <= 0:
+            return False
+
+        state = self.ledger.symbol_state(symbol)
+        qty = float(state.quantity)
+        if abs(qty) <= 1e-12:
+            return False
+
+        avg_cost = float(state.avg_cost)
+        if avg_cost <= 0:
+            return False
+
+        if qty > 0:
+            unrealized_loss = max(0.0, (avg_cost - price) * qty)
+            loss_pct = max(0.0, (avg_cost - price) / avg_cost)
+        else:
+            unrealized_loss = max(0.0, (price - avg_cost) * abs(qty))
+            loss_pct = max(0.0, (price - avg_cost) / avg_cost)
+
+        if mode == "notional":
+            return unrealized_loss >= float(threshold)
+        return loss_pct >= float(threshold)
+
+    def _forced_stop_order(self, *, timestamp: str, symbol: str, current_qty: float) -> OrderEvent | None:
+        if abs(current_qty) <= 1e-12:
+            return None
+        side = "SELL" if current_qty > 0 else "BUY"
+        return OrderEvent(
+            timestamp=timestamp,
+            symbol=symbol,
+            side=side,
+            quantity=abs(current_qty),
+            order_type="MARKET",
+        )
 
     def run(self, bars: list[MarketEvent], strategy) -> list[float]:
         """Run strategy over historical bars and return equity curve.
@@ -264,10 +355,19 @@ class BacktestEngine:
         self.position_series = []
         self.cash_series = []
         self.timestamp_series = []
+        self.ledger = AccountingLedger(
+            initial_cash=self.config.initial_cash,
+            borrow_rate_bps=self.config.borrow_rate_bps,
+            financing_bars_per_year=self.config.financing_bars_per_year,
+        )
+        self.cooldown_until_index = {}
+        self.current_day_key = None
+        self.daily_trade_counts = {"BUY": 0, "SELL": 0, "TOTAL": 0}
 
         timestamp_baskets = self._timestamp_baskets(bars)
 
         for i, (timestamp, bars_by_symbol) in enumerate(timestamp_baskets):
+            self._reset_trade_counter_if_new_day(timestamp)
             for symbol, bar in bars_by_symbol.items():
                 self.portfolio.mark_to_market(price=bar.close, symbol=symbol)
 
@@ -280,12 +380,35 @@ class BacktestEngine:
             symbols_to_rebalance = set(bars_by_symbol.keys()) | set(self.portfolio.state.positions.keys())
 
             rebalance_orders: list[OrderEvent] = []
+            forced_symbols: set[str] = set()
+            cooldown_bars = max(0, int(self.config.stop_cooldown_bars))
+            for symbol, bar in bars_by_symbol.items():
+                current_qty = float(self.portfolio.state.positions.get(symbol, 0.0))
+                if abs(current_qty) <= 1e-12:
+                    continue
+                if not self._stop_loss_triggered(symbol=symbol, price=bar.close):
+                    continue
+
+                force_order = self._forced_stop_order(timestamp=timestamp, symbol=symbol, current_qty=current_qty)
+                if force_order is None:
+                    continue
+
+                rebalance_orders.append(force_order)
+                forced_symbols.add(symbol)
+                if cooldown_bars > 0:
+                    self.cooldown_until_index[symbol] = i + cooldown_bars
+
             for symbol in symbols_to_rebalance:
                 bar = bars_by_symbol.get(symbol)
                 if bar is None:
                     continue
 
                 target_weight = float(target_weights.get(symbol, 0.0))
+                cooldown_until = int(self.cooldown_until_index.get(symbol, -1))
+                in_cooldown = i < cooldown_until
+                if symbol in forced_symbols or in_cooldown:
+                    target_weight = 0.0
+
                 target_weight = apply_max_exposure(target_weight, max_abs_exposure=self.config.max_abs_exposure)
                 target_weight = clamp_weight(target_weight, max_abs_weight=self.config.max_abs_weight)
                 if not self.config.allow_short:
@@ -311,6 +434,8 @@ class BacktestEngine:
                 delta = target_qty - current_qty
                 if abs(delta) < 1e-9:
                     continue
+                if symbol in forced_symbols:
+                    continue
 
                 rebalance_orders.append(
                     OrderEvent(
@@ -325,11 +450,19 @@ class BacktestEngine:
             sells = [order for order in rebalance_orders if order.side == "SELL"]
             buys = [order for order in rebalance_orders if order.side == "BUY"]
             for order in sells + buys:
-                self.pending_orders.append(PendingOrder(order=order, ready_at_index=i + latency))
+                self.pending_orders.append(
+                    PendingOrder(order=order, ready_at_index=i + latency, is_forced_exit=order.symbol in forced_symbols)
+                )
 
             self.position_series.append(sum(float(qty) for qty in self.portfolio.state.positions.values()))
             self.cash_series.append(self.portfolio.state.cash)
             self.timestamp_series.append(timestamp)
+
+            self.ledger.on_mark(
+                timestamp=timestamp,
+                prices_by_symbol={symbol: bar.close for symbol, bar in bars_by_symbol.items()},
+                cash=self.portfolio.state.cash,
+            )
 
         return RunResult(
             equity_curve=list(self.portfolio.equity_curve),
@@ -337,4 +470,26 @@ class BacktestEngine:
             positions=list(self.position_series),
             cash_series=list(self.cash_series),
             timestamps=list(self.timestamp_series),
+            positions_by_symbol=list(self.ledger.positions_by_symbol),
+            portfolio_history=[
+                {
+                    "timestamp": snap.timestamp,
+                    "cash": snap.cash,
+                    "equity": snap.equity,
+                    "gross_exposure": snap.gross_exposure,
+                    "net_exposure": snap.net_exposure,
+                }
+                for snap in self.ledger.portfolio_history
+            ],
+            journal=[
+                {
+                    "timestamp": entry.timestamp,
+                    "symbol": entry.symbol,
+                    "entry_type": entry.entry_type,
+                    "amount": entry.amount,
+                    "details": entry.details,
+                }
+                for entry in self.ledger.journal_entries
+            ],
+            trade_attribution=list(self.ledger.trade_attribution),
         )

@@ -48,6 +48,7 @@ python -m experiments.run_backtest  # uses configs/default.yaml
 ## Phase 4 workflow additions
 
 - `experiments/run_backtest.py` now persists run artifacts (`config.snapshot.json`, `metrics.summary.json`, `equity_curve.csv`, `fills.csv`, `positions.csv`) under `artifacts/runs/...`.
+- Run artifacts now also include accounting outputs (`positions_by_symbol.csv`, `portfolio_history.csv`, `ledger_journal.csv`, `trade_attribution.csv`) for auditability.
 - Extended analytics include trade count/win rate, exposure, turnover, rolling Sharpe summary, and drawdown duration.
 - Optional benchmark comparison can be enabled in `configs/default.yaml`.
 - `experiments/run_cost_sensitivity.py` sweeps fee/slippage/spread assumptions and prints comparative metrics.
@@ -118,6 +119,22 @@ Practical implication:
   - negative strategy target weights are clamped to `0.0`,
   - sell executions are capped to currently held inventory (no net short).
 - To enable shorting for research, set `allow_short: true` when constructing `EngineConfig`.
+
+### Optional stop-loss with cooldown
+
+- `EngineConfig` also supports optional per-symbol stop-loss controls:
+  - `stop_loss_mode`: `pct` or `notional`
+  - `stop_loss_value`: threshold (fraction for `pct`, dollars for `notional`)
+  - `stop_cooldown_bars`: number of bars to keep the symbol flat after liquidation
+- When configured and breached, the engine liquidates the symbol and blocks re-entry until cooldown expires.
+
+### Optional daily trade cap
+
+- `EngineConfig` supports optional daily fill caps:
+  - `max_trades_per_day`: maximum number of executed fills allowed per day
+  - `trade_cap_side`: `buy`, `sell`, or `both`
+- Cap accounting is based on **executed fills**, grouped by timestamp day.
+- Forced stop-loss exits remain safety actions and are not blocked by the daily cap.
 
 ### Series length note (multi-asset runs)
 
