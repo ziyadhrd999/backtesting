@@ -15,6 +15,49 @@ from strategies.factory import build_strategy
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _symbols_from_data_cfg(data_cfg: dict) -> list[str]:
+    """Resolve and filter configured symbols for a run.
+
+    Supports either ``symbol`` (single) or ``symbols`` (list) and optional
+    universe controls via ``include_symbols``, ``exclude_symbols``, and
+    ``max_symbols``.
+    """
+    raw_symbols = data_cfg.get("symbols")
+    symbols: list[str]
+    if isinstance(raw_symbols, list):
+        symbols = [str(symbol).strip() for symbol in raw_symbols if str(symbol).strip()]
+    else:
+        single = str(data_cfg.get("symbol", "NVDA")).strip()
+        symbols = [single] if single else []
+
+    include_symbols = data_cfg.get("include_symbols")
+    if isinstance(include_symbols, list) and include_symbols:
+        include_set = {str(symbol).strip() for symbol in include_symbols if str(symbol).strip()}
+        symbols = [symbol for symbol in symbols if symbol in include_set]
+
+    exclude_symbols = data_cfg.get("exclude_symbols")
+    if isinstance(exclude_symbols, list) and exclude_symbols:
+        exclude_set = {str(symbol).strip() for symbol in exclude_symbols if str(symbol).strip()}
+        symbols = [symbol for symbol in symbols if symbol not in exclude_set]
+
+    max_symbols = data_cfg.get("max_symbols")
+    if max_symbols is not None:
+        try:
+            max_n = max(0, int(max_symbols))
+            symbols = symbols[:max_n]
+        except (TypeError, ValueError):
+            pass
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for symbol in symbols:
+        if symbol in seen:
+            continue
+        seen.add(symbol)
+        unique.append(symbol)
+    return unique
+
+
 def load_bars(data_cfg: dict) -> list:
     """Load market bars from configured data source.
 
@@ -38,12 +81,18 @@ def load_bars(data_cfg: dict) -> list:
     source = str(data_cfg.get("source", "yfinance")).lower().strip()
 
     if source == "yfinance":
-        return load_yfinance(
-            symbol=str(data_cfg.get("symbol", "NVDA")),
-            period=str(data_cfg.get("period", "2y")),
-            interval=str(data_cfg.get("interval", "1d")),
-            auto_adjust=bool(data_cfg.get("auto_adjust", True)),
-        )
+        symbols = _symbols_from_data_cfg(data_cfg)
+        all_bars: list = []
+        for symbol in symbols:
+            all_bars.extend(
+                load_yfinance(
+                    symbol=symbol,
+                    period=str(data_cfg.get("period", "2y")),
+                    interval=str(data_cfg.get("interval", "1d")),
+                    auto_adjust=bool(data_cfg.get("auto_adjust", True)),
+                )
+            )
+        return sorted(all_bars, key=lambda bar: (bar.timestamp, bar.symbol))
 
     if source == "csv":
         csv_path = Path(data_cfg["path"])

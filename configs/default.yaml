@@ -22,7 +22,8 @@ strategy:
 
 data:
   source: yfinance
-  symbol: NVDA
+  symbols: [NVDA, MSFT, AAPL]
+  max_symbols: 3
   period: 2y
   interval: 1d
   auto_adjust: true

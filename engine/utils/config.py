@@ -29,7 +29,10 @@ def _simple_yaml_parse(text: str) -> dict[str, Any]:
             stack.append((indent, parsed))
             continue
 
-        if value.lower() in {"true", "false"}:
+        if value.startswith("[") and value.endswith("]"):
+            inner = value[1:-1].strip()
+            parsed = [] if inner == "" else [item.strip().strip('"').strip("'") for item in inner.split(",")]
+        elif value.lower() in {"true", "false"}:
             parsed = value.lower() == "true"
         else:
             try:
