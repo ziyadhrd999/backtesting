@@ -1,7 +1,7 @@
 import csv
 import json
 import platform
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from subprocess import CalledProcessError, check_output
 
@@ -107,7 +107,7 @@ def _persist_run(
         >>> isinstance(_persist_run({}, {}, [], [], [], [], []), Path)
         True
     """
-    run_id = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     strategy_name = str(cfg.get("strategy", {}).get("name", "strategy"))
     run_dir = ROOT / "artifacts" / "runs" / f"{run_id}_{strategy_name}"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -117,7 +117,7 @@ def _persist_run(
 
     run_meta = {
         "run_id": run_id,
-        "created_at_utc": datetime.now(UTC).isoformat(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": _git_commit(),
         "python": platform.python_version(),
     }
