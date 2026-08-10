@@ -1,19 +1,19 @@
 engine:
   initial_cash: 100000
-  fee_bps: 1.0
-  slippage_bps: 2.0
-  spread_bps: 1.0
+  fee_bps: 0.25
+  slippage_bps: 1.0
+  spread_bps: 0.5
   annualization: 252
   latency_bars: 0
-  max_abs_weight: 1.0
+  max_abs_weight: 2.0
   allow_short: false
-  borrow_rate_bps: 0.0
+  borrow_rate_bps: 0.2
   financing_bars_per_year: 252
-  stop_loss_mode: null
-  stop_loss_value: null
-  stop_cooldown_bars: 0
-  max_trades_per_day: null
-  trade_cap_side: both
+  stop_loss_mode: pct
+  stop_loss_value: 0.05
+  stop_cooldown_bars: 5
+  max_trades_per_day: 5
+  trade_cap_side: buy
 
 strategy:
   name: moving_average
@@ -25,7 +25,7 @@ data:
   symbols: [NVDA, MSFT, AAPL]
   max_symbols: 3
   period: 2y
-  interval: 1d
+  interval: 60m
   auto_adjust: true
 
 analytics:
